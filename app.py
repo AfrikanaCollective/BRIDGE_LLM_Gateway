@@ -245,7 +245,7 @@ async def generate_with_image(
                     timeout=aiohttp.ClientTimeout(
                         # connect=60,
                         total=config.REQUEST_TIMEOUT,
-                        # sock_read=600  # Key setting for slow endpoints
+                        sock_read=600  # Key setting for slow endpoints
                     )
             ) as response:
 
