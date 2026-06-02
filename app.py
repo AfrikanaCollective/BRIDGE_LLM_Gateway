@@ -196,7 +196,7 @@ async def generate_with_image(
         image_data = await image.read()
         img = Image.open(io.BytesIO(image_data))
 
-        max_height = 1024
+        max_height = 1500
         if img.height > max_height:
             # Calculate new width maintaining aspect ratio
             aspect_ratio = img.width / img.height
@@ -214,9 +214,9 @@ async def generate_with_image(
             img = rgb_img
             logger.info(f"Converted {img.mode} to RGB")
 
-        # Compress to JPEG (quality 85 for balance)
+        # Compress to JPEG (quality 95 for balance)
         buffer = io.BytesIO()
-        img.save(buffer, format="JPEG", quality=85, optimize=True)
+        img.save(buffer, format="JPEG", quality=95, optimize=True)
         image_data = buffer.getvalue()
 
         image_base64 = base64.b64encode(image_data).decode('utf-8')
@@ -348,15 +348,14 @@ async def generate_with_image(
                     logger.warning(f"Empty response from model. Last chunk: {chunk if 'chunk' in locals() else 'N/A'}")
                     full_response = "No response generated from model."
 
-                logger.debug(f"Raw response (first 200 chars): {full_response[:200]}")
+                logger.info(f"Raw response (first 200 chars): {full_response[:200]}")
 
                 # ✅ TRY TO PARSE AS JSON (for structured extractions)
                 content = full_response
                 try:
                     # Attempt JSON parsing
                     json_response = json.loads(full_response)
-                    logger.info(
-                        f"✓ Parsed response as JSON with keys: {list(json_response.keys()) if isinstance(json_response, dict) else 'N/A'}")
+                    logger.info(f"✓ Parsed response as JSON: {json_response}")
 
                     # If it's a dict with a "response" key, extract that value
                     if isinstance(json_response, dict) and "response" in json_response:
