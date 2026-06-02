@@ -1,5 +1,6 @@
 import io
 import ssl
+import json
 import base64
 import aiohttp
 import asyncio
@@ -201,10 +202,22 @@ async def generate_with_image(
             aspect_ratio = img.width / img.height
             new_width = int(max_height * aspect_ratio)
             img = img.resize((new_width, max_height), Image.Resampling.LANCZOS)
-            buffer = io.BytesIO()
-            img.save(buffer, format="JPEG", quality=85)
-            image_data = buffer.getvalue()
             logger.info(f"Resized to: {img.size} (width={new_width}, height={max_height})")
+
+        # Convert RGBA/PNG to RGB JPEG
+        if img.mode in ('RGBA', 'LA', 'P'):
+            rgb_img = Image.new('RGB', img.size, (255, 255, 255))
+            if img.mode == 'RGBA':
+                rgb_img.paste(img, mask=img.split()[-1])
+            else:
+                rgb_img.paste(img)
+            img = rgb_img
+            logger.info(f"Converted {img.mode} to RGB")
+
+        # Compress to JPEG (quality 85 for balance)
+        buffer = io.BytesIO()
+        img.save(buffer, format="JPEG", quality=85, optimize=True)
+        image_data = buffer.getvalue()
 
         image_base64 = base64.b64encode(image_data).decode('utf-8')
 
@@ -213,7 +226,7 @@ async def generate_with_image(
         media_type = "image/jpeg" if ext in ["jpg", "jpeg"] else f"image/{ext}"
 
         logger.info(f"Processing image: {image.filename} ({media_type})")
-        logger.info(f"Image size: {len(image_data)} bytes")
+        logger.info(f"Image size: {len(image_data) / (1024 * 1024) :.2f} MBs")
 
         # Qwen 3.5:9B format - simpler structure
         # The trick: use a string content with special image token format
@@ -259,6 +272,47 @@ async def generate_with_image(
                         detail=f"Ollama error: {error_text}"
                     )
 
+                # ============================================
+                # PARSE STREAMING NDJSON
+                # ============================================
+                full_response = ""
+                metrics = {}
+                chunk_count = 0
+
+                async for line in response.content:
+                    if not line:
+                        continue
+
+                    try:
+                        chunk = json.loads(line)
+                        full_response += chunk.get("response", "")
+                        chunk_count += 1
+
+                        # Log streaming progress
+                        if chunk_count % 10 == 0:
+                            logger.debug(
+                                f"Streaming... {chunk_count} chunks, {len(full_response)} chars")
+
+                        # Check if generation complete
+                        if chunk.get("done"):
+                            metrics = {
+                                "total_duration": round(chunk.get("total_duration", 0) / 1_000_000_000, 2),
+                                "load_duration": round(chunk.get("load_duration", 0) / 1_000_000_000, 2),
+                                "prompt_eval_count": chunk.get("prompt_eval_count", 0),
+                                "prompt_eval_duration": round(
+                                    chunk.get("prompt_eval_duration", 0) / 1_000_000_000, 2),
+                                "eval_count": chunk.get("eval_count", 0),
+                                "eval_duration": round(chunk.get("eval_duration", 0) / 1_000_000_000, 2),
+                            }
+                            logger.info(f"✓ Generation complete: {chunk_count}")
+                            logger.info(f"  Metrics: {metrics}")
+                            break
+
+                    except json.JSONDecodeError as e:
+                        logger.warning(f"Failed to parse JSON line: {repr(line[:100])}")
+                        continue
+
+                '''
                 result = await response.json()
                 logger.debug(f"Ollama response keys: {list(result.keys())}")
 
@@ -283,10 +337,47 @@ async def generate_with_image(
                     "eval_count": result.get("eval_count"),
                     "eval_duration": round(result.get("eval_duration", 0) / 1_000_000_000, 2),
                 }
+                '''
+
+                # ============================================
+                # POST-PROCESS & RETURN
+                # ============================================
+                full_response = full_response.strip()
+
+                if not full_response:
+                    logger.warning(f"Empty response from model. Last chunk: {chunk if 'chunk' in locals() else 'N/A'}")
+                    full_response = "No response generated from model."
+
+                logger.debug(f"Raw response (first 200 chars): {full_response[:200]}")
+
+                # ✅ TRY TO PARSE AS JSON (for structured extractions)
+                content = full_response
+                try:
+                    # Attempt JSON parsing
+                    json_response = json.loads(full_response)
+                    logger.info(
+                        f"✓ Parsed response as JSON with keys: {list(json_response.keys()) if isinstance(json_response, dict) else 'N/A'}")
+
+                    # If it's a dict with a "response" key, extract that value
+                    if isinstance(json_response, dict) and "response" in json_response:
+                        content = json_response["response"]
+                        logger.info(f"✓ Extracted nested 'response' value")
+                    # Otherwise use the whole JSON as-is
+                    else:
+                        content = json.dumps(json_response, indent=2)
+                        logger.info(f"✓ Using full JSON response (not nested)")
+
+                except json.JSONDecodeError:
+                    # If not JSON, use the raw response
+                    content = full_response
+                    logger.info(f"Response is plain text (not JSON)")
+
+                # Strip markdown code blocks if present
+                content = strip_markdown_code_blocks(content)
 
                 # Format response
                 response_data = {
-                    "response": content,
+                    "response": full_response, # content,
                     "model": config.MODEL_NAME,
                     "timestamp": datetime.now().isoformat(),
                     "metrics": metrics
