@@ -1,13 +1,13 @@
 {
   "model": "qwen3.5:9b",
-  "timestamp": "2026-04-30T05:01:19.296500",
+  "timestamp": "2026-05-05T04:07:49.050085",
   "metrics": {
-    "total_duration": 119.12,
+    "total_duration": 115.86,
     "load_duration": 0.13,
     "prompt_eval_count": 2408,
-    "prompt_eval_duration": 0.93,
+    "prompt_eval_duration": 0.82,
     "eval_count": 12971,
-    "eval_duration": 114.33
+    "eval_duration": 111.1
   },
   "raw_json": {
     "Skin": "Normal",
@@ -73,11 +73,16 @@
     "Action plan": "1. I.V DIO 140.4 ml over 24hrs 2. Cord care. 3. Keep warm"
   },
   "cleaned_json": {
-    "investigations": {
-      "Investigations ordered": "FHG"
+    "further_examination": {
+      "Neuro": "Normal",
+      "Further examination of Resp / CVS / GIT / GU / Skin / Birth Trauma?": "Normal",
+      "Birth defects?": false
     },
     "action_plan": {
       "Action plan": "1. I.V DIO 140.4 ml over 24hrs 2. Cord care. 3. Keep warm"
+    },
+    "diagnosis": {
+      "Others diagnoses (List below)": "Refusal to Breastfeed"
     },
     "general_examination": {
       "Skin": "Normal",
@@ -99,14 +104,6 @@
       "Distension": false,
       "Umbilicus": "Local pus"
     },
-    "further_examination": {
-      "Neuro": "Normal",
-      "Further examination of Resp / CVS / GIT / GU / Skin / Birth Trauma?": "Normal",
-      "Birth defects?": false
-    },
-    "summary": {
-      "Summary of presentation and problems": "Refusal to breastfeed."
-    },
     "interventions": {
       "OPV": false,
       "Prophylaxis for PMTCT": false,
@@ -119,8 +116,11 @@
       "IV Fluids": true,
       "Surfactant": false
     },
-    "diagnosis": {
-      "Others diagnoses (List below)": "Refusal to Breastfeed"
+    "investigations": {
+      "Investigations ordered": "FHG"
+    },
+    "summary": {
+      "Summary of presentation and problems": "Refusal to breastfeed."
     }
   },
   "case_summary": "=== NAR PAGE 2 SUMMARY ===\n\nGENERAL EXAMINATION:\n  • Baby's skin condition: Normal\n  🟠 General appearance of baby: Well\n  🟠 Baby's cry: Normal\n  • Baby has crackles: No\n  • Baby has grunting: No\n  • Air entry in baby's lungs: Yes\n  • Cyanosis present in baby's central body: No\n  • Indrawing of lower chest: None\n  • Retraction of xiphoid process: None\n  • Retraction of intercostal muscles: None\n  • Capillary refill time at sternal site: 2 seconds\n  • Pallor or anaemia present in baby: None\n  • Presence of heart murmur: No\n  • Does baby have bulging fontanelle: No\n  • Baby is irritable: No\n  • Baby's muscle tone: Normal\n  • Abdominal distension present: No\n  • Condition of the umbilicus: Local pus\n\nFURTHER EXAMINATION:\n  🟠 Neurological examination findings: Normal\n  🟠 Further examination findings for respiratory, cardiovascular, GIT, GU, skin, and birth trauma: Normal\n  • Birth defects present in baby: No\n\nSUMMARY:\n  🔴 Summary of baby's presentation and problems: Refusal to breastfeed.\n\nINVESTIGATIONS:\n  • Investigations ordered for the baby: FHG\n\nDIAGNOSIS:\n  🟠 Other diagnoses not listed above: Refusal to Breastfeed\n\nINTERVENTIONS:\n  • OPV (polio) vaccination given: No\n  • Prophylaxis for prevention of mother-to-child transmission: No\n  • Blood transfusion given: No\n  • Antibiotic therapy given: No\n  • Oxygen therapy given: No\n  • Kangaroo mother care provided: No\n  • CPAP therapy given: No\n  • Incubator or warm environment provided: Yes\n  • Intravenous fluids given: Yes\n  • Surfactant therapy given: No\n\nACTION PLAN:\n  🔴 Action plan for baby's management: 1. I.V DIO 140.4 ml over 24hrs 2. Cord care. 3. Keep warm\n\n--- DATA QUALITY ASSESSMENT ---\n Data coverage: 57.4%\n Data completeness for required fields: 81.1%\n\n\n--- RISK ASSESSMENT ---\nTotal Risk Flags: 2\n  HIGH: 2\n\nFLAGS:\n  🟠 HIGH: Good bilateral air entry present\n  🟠 HIGH: Umbilicus = Local pus",

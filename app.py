@@ -191,6 +191,19 @@ async def generate_with_image(
     try:
         # Read and encode image
         image_data = await image.read()
+
+        '''
+        max_dimension = 1024
+        img = Image.open(io.BytesIO(image_data))
+        if max(img.size) > max_dimension:
+            img.thumbnail((max_dimension, max_dimension), Image.Resampling.LANCZOS)
+            buffer = io.BytesIO()
+            img.save(buffer, format="JPEG", quality=85)
+            image_data = buffer.getvalue()
+            logger.info(f"Resized image to {img.size}")
+        image_base64 = base64.b64encode(image_data).decode('utf-8')
+        '''
+
         image_base64 = base64.b64encode(image_data).decode('utf-8')
 
         # Determine image type
@@ -210,7 +223,8 @@ async def generate_with_image(
             "model": config.MODEL_NAME,
             "prompt": prompt,
             "images": [image_base64],  # Vision models expect images here
-            "stream": False,
+            "stream": True,
+            "keep_alive": config.OLLAMA_KEEP_ALIVE,
             "options": {
                 "temperature": 0,
                 "top_k": 1,

@@ -1,13 +1,13 @@
 {
   "model": "qwen3.5:9b",
-  "timestamp": "2026-04-30T04:59:20.129180",
+  "timestamp": "2026-05-05T04:05:53.138889",
   "metrics": {
-    "total_duration": 71.72,
-    "load_duration": 0.14,
+    "total_duration": 67.72,
+    "load_duration": 2.14,
     "prompt_eval_count": 2373,
-    "prompt_eval_duration": 0.83,
+    "prompt_eval_duration": 0.81,
     "eval_count": 7382,
-    "eval_duration": 68.53
+    "eval_duration": 62.45
   },
   "raw_json": {
     "Date": "03-01-2025",

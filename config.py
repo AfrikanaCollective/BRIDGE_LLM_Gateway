@@ -39,12 +39,14 @@ class Config:
         os.getenv("MAX_CONCURRENT_REQUESTS", "10")
     )
     REQUEST_TIMEOUT: int = int(
-        os.getenv("REQUEST_TIMEOUT", "300")
+        os.getenv("REQUEST_TIMEOUT", "600")
     )
+
+    OLLAMA_KEEP_ALIVE: str = os.getenv("OLLAMA_KEEP_ALIVE", "5m")
 
     # Image settings
     MAX_IMAGE_SIZE_MB: int = int(
-        os.getenv("MAX_IMAGE_SIZE_MB", "10")
+        os.getenv("MAX_IMAGE_SIZE_MB", "15")
     )
     ALLOWED_IMAGE_FORMATS: tuple = tuple(
         os.getenv("ALLOWED_IMAGE_FORMATS", "JPEG,PNG,GIF,WEBP").split(",")
@@ -75,6 +77,7 @@ class Config:
 
 # For convenience, expose config as module-level variables
 OLLAMA_BASE_URL = Config.OLLAMA_BASE_URL
+OLLAMA_KEEP_ALIVE = Config.OLLAMA_KEEP_ALIVE
 MODEL_NAME = Config.MODEL_NAME
 API_HOST = Config.API_HOST
 API_PORT = Config.API_PORT
