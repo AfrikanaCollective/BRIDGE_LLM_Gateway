@@ -348,13 +348,16 @@ async def generate_with_image(
                     logger.warning(f"Empty response from model. Last chunk: {chunk if 'chunk' in locals() else 'N/A'}")
                     full_response = "No response generated from model."
 
-                logger.info(f"Raw response (first 200 chars): {full_response[:200]}")
-
                 # ✅ TRY TO PARSE AS JSON (for structured extractions)
                 content = full_response
+
+                # Strip markdown code blocks if present
+                content = strip_markdown_code_blocks(content)
+                logger.info(f"Raw response : {content}\n\n")
+
                 try:
                     # Attempt JSON parsing
-                    json_response = json.loads(full_response)
+                    json_response = json.loads(content)
                     logger.info(f"✓ Parsed response as JSON: {json_response}")
 
                     # If it's a dict with a "response" key, extract that value
@@ -371,12 +374,9 @@ async def generate_with_image(
                     content = full_response
                     logger.info(f"Response is plain text (not JSON)")
 
-                # Strip markdown code blocks if present
-                content = strip_markdown_code_blocks(content)
-
                 # Format response
                 response_data = {
-                    "response": full_response, # content,
+                    "response": content,
                     "model": config.MODEL_NAME,
                     "timestamp": datetime.now().isoformat(),
                     "metrics": metrics
