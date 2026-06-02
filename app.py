@@ -1,4 +1,5 @@
 import io
+import re
 import ssl
 import json
 import base64
@@ -103,6 +104,19 @@ def get_uvicorn_ssl_config():
     return str(key_path), str(cert_path)
 
 
+def clean_json_string(s):
+    """Remove section headers and fix malformed JSON"""
+
+    # Remove section headers like "A: Mother's details", "B: Labour and Birth"
+    s = re.sub(r'",\s*"[A-Z]:\s+[^"]*"', '"', s)
+    s = re.sub(r'",\s*"[A-Z]:\s+[^"]+"', '"', s)
+
+    # Fix escaped quotes in values
+    s = s.replace("\\'", "'")
+
+    return s
+
+
 # ============================================================
 # STARTUP & SHUTDOWN HANDLERS
 # ============================================================
@@ -126,9 +140,14 @@ async def lifespan(app: FastAPI):
     # Create aiohttp session with optional SSL context
     if ssl_context:
         connector = aiohttp.TCPConnector(ssl=ssl_context)
-        app_state["client_session"] = aiohttp.ClientSession(connector=connector)
+        app_state["client_session"] = aiohttp.ClientSession(
+            connector=connector,
+            read_bufsize=15 * 1024 * 1024,  # 15MB buffer
+        )
     else:
-        app_state["client_session"] = aiohttp.ClientSession()
+        app_state["client_session"] = aiohttp.ClientSession(
+            read_bufsize=15 * 1024 * 1024,  # 15MB buffer
+        )
 
     # Create semaphore for concurrent request limiting
     app_state["semaphore"] = asyncio.Semaphore(config.MAX_CONCURRENT_REQUESTS)
@@ -350,12 +369,8 @@ async def generate_with_image(
 
                 # ✅ TRY TO PARSE AS JSON (for structured extractions)
                 content = full_response
-
-                logger.info(f"Raw response (before strip): {content}\n\n")
-
                 # Strip markdown code blocks if present
                 content = strip_markdown_code_blocks(content)
-                logger.info(f"Raw response (After strip): {content}\n\n")
 
                 try:
                     # Attempt JSON parsing
@@ -364,7 +379,8 @@ async def generate_with_image(
 
                     # If it's a dict with a "response" key, extract that value
                     if isinstance(json_response, dict) and "response" in json_response:
-                        content = json_response["response"]
+                        cleaned_response = clean_json_string(json_response.get("response"))
+                        content = json.loads(cleaned_response)
                         logger.info(f"✓ Extracted nested 'response' value")
                     # Otherwise use the whole JSON as-is
                     else:
