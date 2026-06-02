@@ -351,9 +351,11 @@ async def generate_with_image(
                 # ✅ TRY TO PARSE AS JSON (for structured extractions)
                 content = full_response
 
+                logger.info(f"Raw response (before strip): {content}\n\n")
+
                 # Strip markdown code blocks if present
                 content = strip_markdown_code_blocks(content)
-                logger.info(f"Raw response : {content}\n\n")
+                logger.info(f"Raw response (After strip): {content}\n\n")
 
                 try:
                     # Attempt JSON parsing
