@@ -1,6 +1,6 @@
 # Qwen API Service
 
-A production-ready FastAPI service for processing medical forms using the Qwen 2.5:9B LLM model with integrated form extraction, clinical analysis, and multi-agent architecture.
+A production-ready FastAPI service for processing medical forms using the Qwen 3.5:9B LLM model with integrated form extraction, clinical analysis, and multi-agent architecture.
 
 **Status**: ✅ Production-Ready | **Last Updated**: 2024-04-27
 
@@ -685,7 +685,7 @@ GET /health
 {
   "status": "ok",
   "timestamp": "2024-04-27T10:30:45.123456",
-  "model": "qwen2.5:9b",
+  "model": "qwen3.5:9b",
   "ollama_url": "http://172.17.0.1:11434",
   "max_concurrent": 10,
   "api_version": "1.0.0",
