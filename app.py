@@ -6,7 +6,6 @@ import base64
 import aiohttp
 import asyncio
 import logging
-import traceback
 from datetime import datetime
 from pathlib import Path
 from contextlib import asynccontextmanager
@@ -388,13 +387,8 @@ async def generate_with_image(
                         content = json.dumps(json_response, indent=2)
                         logger.info(f"✓ Using full JSON response (not nested)")
 
-                except json.JSONDecodeError:
+                except json.JSONDecodeError as e:
                     # If not JSON, use the raw response
-
-                    logger.error(f"   Error: {e.msg}")
-                    logger.error(f"   Line: {e.lineno}, Column: {e.colno}")
-                    logger.error(f"   Problem area:\n{content[max(0, e.pos - 100):e.pos + 100]}")
-                    logger.error(f"   Full traceback:\n{traceback.format_exc()}")
 
                     content = full_response
                     logger.info(f"Response is plain text (not JSON)")
