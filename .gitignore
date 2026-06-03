@@ -1,5 +1,6 @@
 .env
 certs/
+certs_server/
 .idea/
 __pycache__/
 .pyctest_reports/
