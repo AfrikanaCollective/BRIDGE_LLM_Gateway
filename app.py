@@ -213,8 +213,9 @@ async def generate_with_image(
     try:
         # Read and encode image
         image_data = await image.read()
-        img = Image.open(io.BytesIO(image_data))
 
+        '''
+        img = Image.open(io.BytesIO(image_data))        
         max_height = 1500
         if img.height > max_height:
             # Calculate new width maintaining aspect ratio
@@ -232,11 +233,13 @@ async def generate_with_image(
                 rgb_img.paste(img)
             img = rgb_img
             logger.info(f"Converted {img.mode} to RGB")
-
+        
+        
         # Compress to JPEG (quality 95 for balance)
         buffer = io.BytesIO()
         img.save(buffer, format="JPEG", quality=95, optimize=True)
         image_data = buffer.getvalue()
+        '''
 
         image_base64 = base64.b64encode(image_data).decode('utf-8')
 
