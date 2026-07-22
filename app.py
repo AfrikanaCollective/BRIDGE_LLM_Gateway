@@ -334,33 +334,6 @@ async def generate_with_image(
                         logger.warning(f"Failed to parse JSON line: {repr(line[:100])}")
                         continue
 
-                '''
-                result = await response.json()
-                logger.debug(f"Ollama response keys: {list(result.keys())}")
-
-                # Extract content - /api/generate returns "response" field
-                content = result.get("response", "")
-
-                # ✅ FIX: Strip markdown code blocks
-                content = strip_markdown_code_blocks(content)
-
-                if not content:
-                    logger.warning(f"Empty content from Ollama. Response: {result}")
-                    content = "No response generated from model."
-
-                logger.info(f"Generated content length: {len(content)} characters")
-
-                # Extract metrics
-                metrics = {
-                    "total_duration": round(result.get("total_duration", 0) / 1_000_000_000, 2),
-                    "load_duration": round(result.get("load_duration", 0) / 1_000_000_000, 2),
-                    "prompt_eval_count": result.get("prompt_eval_count"),
-                    "prompt_eval_duration": round(result.get("prompt_eval_duration", 0) / 1_000_000_000, 2),
-                    "eval_count": result.get("eval_count"),
-                    "eval_duration": round(result.get("eval_duration", 0) / 1_000_000_000, 2),
-                }
-                '''
-
                 # ============================================
                 # POST-PROCESS & RETURN
                 # ============================================
