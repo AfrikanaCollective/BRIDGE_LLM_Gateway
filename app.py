@@ -10,7 +10,6 @@ from datetime import datetime
 from pathlib import Path
 from contextlib import asynccontextmanager
 
-from PIL import Image
 from fastapi import FastAPI, File, UploadFile, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
@@ -213,33 +212,6 @@ async def generate_with_image(
     try:
         # Read and encode image
         image_data = await image.read()
-
-        '''
-        img = Image.open(io.BytesIO(image_data))        
-        max_height = 1500
-        if img.height > max_height:
-            # Calculate new width maintaining aspect ratio
-            aspect_ratio = img.width / img.height
-            new_width = int(max_height * aspect_ratio)
-            img = img.resize((new_width, max_height), Image.Resampling.LANCZOS)
-            logger.info(f"Resized to: {img.size} (width={new_width}, height={max_height})")
-
-        # Convert RGBA/PNG to RGB JPEG
-        if img.mode in ('RGBA', 'LA', 'P'):
-            rgb_img = Image.new('RGB', img.size, (255, 255, 255))
-            if img.mode == 'RGBA':
-                rgb_img.paste(img, mask=img.split()[-1])
-            else:
-                rgb_img.paste(img)
-            img = rgb_img
-            logger.info(f"Converted {img.mode} to RGB")
-        
-        
-        # Compress to JPEG (quality 95 for balance)
-        buffer = io.BytesIO()
-        img.save(buffer, format="JPEG", quality=95, optimize=True)
-        image_data = buffer.getvalue()
-        '''
 
         image_base64 = base64.b64encode(image_data).decode('utf-8')
 
