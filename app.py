@@ -246,110 +246,124 @@ async def generate_with_image(
         logger.info(f"Sending request to Ollama: {config.OLLAMA_BASE_URL}/api/generate")
         logger.debug(f"Payload: model={payload['model']}, image_size={len(image_base64)}, prompt_length={len(prompt)}")
 
-        # Make request with semaphore
-        async with app_state["semaphore"]:
-            async with app_state["client_session"].post(
-                    f"{config.OLLAMA_BASE_URL}/api/generate",
-                    json=payload,
-                    timeout=aiohttp.ClientTimeout(
-                        # connect=60,
-                        total=config.REQUEST_TIMEOUT,
-                        # sock_read=600  # Key setting for slow endpoints
-                    )
-            ) as response:
+        try:
+            # Make request with semaphore
+            async with app_state["semaphore"]:
+                async with app_state["client_session"].post(
+                        f"{config.OLLAMA_BASE_URL}/api/generate",
+                        json=payload,
+                        timeout=aiohttp.ClientTimeout(
+                            # connect=60,
+                            total=config.REQUEST_TIMEOUT,
+                            # sock_read=600  # Key setting for slow endpoints
+                        )
+                ) as response:
 
-                if response.status != 200:
-                    error_text = await response.text()
-                    logger.error(f"Ollama error: {response.status} - {error_text}")
-                    raise HTTPException(
-                        status_code=response.status,
-                        detail=f"Ollama error: {error_text}"
-                    )
+                    if response.status != 200:
+                        error_text = await response.text()
+                        logger.error(f"Ollama error: {response.status} - {error_text}")
+                        raise HTTPException(
+                            status_code=response.status,
+                            detail=f"Ollama error: {error_text}"
+                        )
 
-                # ============================================
-                # PARSE STREAMING NDJSON
-                # ============================================
-                full_response = ""
-                metrics = {}
-                chunk_count = 0
+                    # ============================================
+                    # PARSE STREAMING NDJSON
+                    # ============================================
+                    full_response = ""
+                    metrics = {}
+                    chunk_count = 0
 
-                async for line in response.content:
-                    if not line:
-                        continue
+                    async for line in response.content:
+                        if not line:
+                            continue
 
-                    try:
-                        chunk = json.loads(line)
-                        full_response += chunk.get("response", "")
-                        chunk_count += 1
+                        try:
+                            chunk = json.loads(line)
+                            full_response += chunk.get("response", "")
+                            chunk_count += 1
 
-                        # Log streaming progress
-                        if chunk_count % 10 == 0:
-                            logger.debug(
-                                f"Streaming... {chunk_count} chunks, {len(full_response)} chars")
+                            # Log streaming progress
+                            if chunk_count % 10 == 0:
+                                logger.debug(
+                                    f"Streaming... {chunk_count} chunks, {len(full_response)} chars")
 
-                        # Check if generation complete
-                        if chunk.get("done"):
-                            metrics = {
-                                "total_duration": round(chunk.get("total_duration", 0) / 1_000_000_000, 2),
-                                "load_duration": round(chunk.get("load_duration", 0) / 1_000_000_000, 2),
-                                "prompt_eval_count": chunk.get("prompt_eval_count", 0),
-                                "prompt_eval_duration": round(
-                                    chunk.get("prompt_eval_duration", 0) / 1_000_000_000, 2),
-                                "eval_count": chunk.get("eval_count", 0),
-                                "eval_duration": round(chunk.get("eval_duration", 0) / 1_000_000_000, 2),
-                            }
-                            logger.info(f"✓ Generation complete: {chunk_count}")
-                            logger.info(f"  Metrics: {metrics}")
-                            break
+                            # Check if generation complete
+                            if chunk.get("done"):
+                                metrics = {
+                                    "total_duration": round(chunk.get("total_duration", 0) / 1_000_000_000, 2),
+                                    "load_duration": round(chunk.get("load_duration", 0) / 1_000_000_000, 2),
+                                    "prompt_eval_count": chunk.get("prompt_eval_count", 0),
+                                    "prompt_eval_duration": round(
+                                        chunk.get("prompt_eval_duration", 0) / 1_000_000_000, 2),
+                                    "eval_count": chunk.get("eval_count", 0),
+                                    "eval_duration": round(chunk.get("eval_duration", 0) / 1_000_000_000, 2),
+                                }
+                                logger.info(f"✓ Generation complete: {chunk_count}")
+                                logger.info(f"  Metrics: {metrics}")
+                                break
 
-                    except json.JSONDecodeError as e:
-                        logger.warning(f"Failed to parse JSON line: {repr(line[:100])}")
-                        continue
+                        except json.JSONDecodeError as e:
+                            logger.warning(f"Failed to parse JSON line: {repr(line[:100])}")
+                            continue
 
-                # ============================================
-                # POST-PROCESS & RETURN
-                # ============================================
-                full_response = full_response.strip()
+        except asyncio.TimeoutError:
+            logger.error(
+                f"⏱️ Timed out while streaming from Ollama after {chunk_count} chunks "
+                f"({len(full_response)} chars received so far)"
+            )
+            response_data = {
+                "response": "Time out error",
+                "model": config.MODEL_NAME,
+                "timestamp": datetime.now().isoformat(),
+                "metrics": metrics,
+            }
+            return response_data
 
-                if not full_response:
-                    logger.warning(f"Empty response from model. Last chunk: {chunk if 'chunk' in locals() else 'N/A'}")
-                    full_response = "No response generated from model."
+        # ============================================
+        # POST-PROCESS & RETURN
+        # ============================================
+        full_response = full_response.strip()
 
-                # ✅ TRY TO PARSE AS JSON (for structured extractions)
-                content = full_response
-                # Strip markdown code blocks if present
-                content = strip_markdown_code_blocks(content)
+        if not full_response:
+            logger.warning(f"Empty response from model. Last chunk: {chunk if 'chunk' in locals() else 'N/A'}")
+            full_response = "No response generated from model."
 
-                try:
-                    # Attempt JSON parsing
-                    json_response = json.loads(content)
-                    logger.info(f"✓ Parsed response as JSON: {json_response}")
+        # ✅ TRY TO PARSE AS JSON (for structured extractions)
+        content = full_response
+        # Strip markdown code blocks if present
+        content = strip_markdown_code_blocks(content)
 
-                    # If it's a dict with a "response" key, extract that value
-                    if isinstance(json_response, dict) and "response" in json_response:
-                        cleaned_response = clean_json_string(json_response.get("response"))
-                        content = json.loads(cleaned_response)
-                        logger.info(f"✓ Extracted nested 'response' value")
-                    # Otherwise use the whole JSON as-is
-                    else:
-                        content = json.dumps(json_response, indent=2)
-                        logger.info(f"✓ Using full JSON response (not nested)")
+        try:
+            # Attempt JSON parsing
+            json_response = json.loads(content)
+            logger.info(f"✓ Parsed response as JSON: {json_response}")
 
-                except json.JSONDecodeError as e:
-                    # If not JSON, use the raw response
+            # If it's a dict with a "response" key, extract that value
+            if isinstance(json_response, dict) and "response" in json_response:
+                cleaned_response = clean_json_string(json_response.get("response"))
+                content = json.loads(cleaned_response)
+                logger.info(f"✓ Extracted nested 'response' value: {content}")
+            # Otherwise use the whole JSON as-is
+            else:
+                content = json.dumps(json_response, indent=2)
+                logger.info(f"✓ Using full JSON response (not nested)")
 
-                    content = full_response
-                    logger.info(f"Response is plain text (not JSON)")
+        except json.JSONDecodeError as e:
+            # If not JSON, use the raw response
 
-                # Format response
-                response_data = {
-                    "response": content,
-                    "model": config.MODEL_NAME,
-                    "timestamp": datetime.now().isoformat(),
-                    "metrics": metrics
-                }
+            content = full_response
+            logger.info(f"Response is plain text (not JSON)")
 
-                return response_data
+        # Format response
+        response_data = {
+            "response": content,
+            "model": config.MODEL_NAME,
+            "timestamp": datetime.now().isoformat(),
+            "metrics": metrics
+        }
+
+        return response_data
 
     except HTTPException:
         raise
