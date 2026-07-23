@@ -297,9 +297,10 @@ async def generate_with_image(
                 "temperature": 0,
                 "top_k": 1,
                 "top_p": 1.0,
-                "repeat_penalty": 1.0,  # No repeat penalty variance
+                "repeat_penalty": 1.1,  # mild penalty discourages repetition loops, 1.0: No repeat penalty variance
                 "seed": 42,
                 "num_ctx": 8192,
+                "num_predict": 8192,  # hard cap on generated tokens
             }
         }
 
