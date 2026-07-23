@@ -294,13 +294,14 @@ async def generate_with_image(
             "stream": True,
             "keep_alive": config.OLLAMA_KEEP_ALIVE,
             "options": {
-                "temperature": 0,
-                "top_k": 1,
-                "top_p": 1.0,
-                "repeat_penalty": 1.1,  # mild penalty discourages repetition loops, 1.0: No repeat penalty variance
+                "temperature": 0.1,
+                "top_k": 5,
+                "top_p": 0.9,
+                "repeat_penalty": 1.3,  # penalty discourages repetition loops, 1.0: No repeat penalty variance
+                "repeat_last_n": 256,
                 "seed": 42,
                 "num_ctx": 8192,
-                "num_predict": 8192,  # hard cap on generated tokens
+                "num_predict": 4096,  # hard cap on generated tokens
             }
         }
 
@@ -361,16 +362,22 @@ async def generate_with_image(
                                         chunk.get("prompt_eval_duration", 0) / 1_000_000_000, 2),
                                     "eval_count": chunk.get("eval_count", 0),
                                     "eval_duration": round(chunk.get("eval_duration", 0) / 1_000_000_000, 2),
+                                    "done_reason": chunk.get("done_reason"),
                                 }
                                 logger.info(f"✓ Generation complete: {chunk_count}")
                                 logger.info(f"  Metrics: {metrics}")
+
+                                if metrics["done_reason"] == "length":
+                                    logger.warning(
+                                        f"⚠️ Generation hit num_predict limit (eval_count={metrics['eval_count']}) "
+                                        f"without a natural stop — possible repetition loop even after tuning."
+                                    )
                                 break
 
                         except json.JSONDecodeError as e:
                             parse_failures += 1
                             logger.warning(
                                 f"Failed to parse JSON line #{chunk_count + parse_failures}: {repr(line[:200])} | error: {e}")
-                            logger.warning(f"Failed to parse JSON line: {repr(line[:100])}")
                             continue
 
         except asyncio.TimeoutError:
@@ -392,7 +399,7 @@ async def generate_with_image(
         full_response = full_response.strip()
 
         if not full_response:
-            logger.warning(f"Empty response from model. Last chunk: {chunk if 'chunk' in locals() else 'N/A'}")
+            logger.warning(f"Empty response from model. Last chunk: {chunk}")
             full_response = "No response generated from model."
 
         # ✅ TRY TO PARSE AS JSON (for structured extractions)
