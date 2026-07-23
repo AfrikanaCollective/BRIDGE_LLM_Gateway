@@ -333,6 +333,8 @@ async def generate_with_image(
                     full_response = ""
                     metrics = {}
                     chunk_count = 0
+                    chunk = None
+                    parse_failures = 0
 
                     async for line in response.content:
                         if not line:
@@ -364,6 +366,9 @@ async def generate_with_image(
                                 break
 
                         except json.JSONDecodeError as e:
+                            parse_failures += 1
+                            logger.warning(
+                                f"Failed to parse JSON line #{chunk_count + parse_failures}: {repr(line[:200])} | error: {e}")
                             logger.warning(f"Failed to parse JSON line: {repr(line[:100])}")
                             continue
 
