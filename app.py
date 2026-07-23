@@ -116,6 +116,65 @@ def clean_json_string(s):
     return s
 
 
+def repair_trailing_bare_strings(json_text: str) -> str:
+    """
+    Repairs LLM-generated JSON where a key's value is followed by
+    additional un-keyed ("bare") string literals before the next real
+    "key": pair, e.g.:
+
+        "K: Action plan": "step 1", "step 2", "step 3", "Next key": "value"
+
+    All bare strings following a key's value are merged into that
+    value (joined by \\n), continuing until either:
+      - a string token that is itself followed by a colon (a real key), or
+      - the enclosing object/array closes.
+    """
+    # Tokenize into quoted strings and structural characters.
+    token_pattern = re.compile(r'"(?:[^"\\]|\\.)*"|[{}\[\],:]')
+    tokens = token_pattern.findall(json_text)
+
+    def is_str(tok: str) -> bool:
+        return tok.startswith('"')
+
+    out_tokens = []
+    i, n = 0, len(tokens)
+
+    while i < n:
+        tok = tokens[i]
+        out_tokens.append(tok)
+
+        # Look for a completed "key": "value" pair
+        if (
+            is_str(tok)
+            and i + 2 < n
+            and tokens[i + 1] == ":"
+            and is_str(tokens[i + 2])
+        ):
+            out_tokens.append(tokens[i + 1])  # the colon
+            merged_value = json.loads(tokens[i + 2])  # unescape the value string
+
+            j = i + 3
+            # Keep consuming ", "<bare string>" as long as that string
+            # is NOT itself followed by a colon (which would make it a key)
+            while (
+                j + 1 < n
+                and tokens[j] == ","
+                and is_str(tokens[j + 1])
+                and not (j + 2 < n and tokens[j + 2] == ":")
+            ):
+                bare_str = json.loads(tokens[j + 1])
+                merged_value += "\n" + bare_str
+                j += 2  # consumed the comma + the bare string
+
+            out_tokens.append(json.dumps(merged_value))  # re-escape merged value
+            i = j
+            continue
+
+        i += 1
+
+    return "".join(out_tokens)
+
+
 # ============================================================
 # STARTUP & SHUTDOWN HANDLERS
 # ============================================================
@@ -240,6 +299,7 @@ async def generate_with_image(
                 "top_p": 1.0,
                 "repeat_penalty": 1.0,  # No repeat penalty variance
                 "seed": 42,
+                "num_ctx": 8192,
             }
         }
 
@@ -336,6 +396,7 @@ async def generate_with_image(
 
         try:
             # Attempt JSON parsing
+            content = repair_trailing_bare_strings(content)
             json_response = json.loads(content)
             logger.info(f"✓ Parsed response as JSON: {json_response}")
 
