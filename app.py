@@ -292,6 +292,7 @@ async def generate_with_image(
             "prompt": prompt,
             "images": [image_base64],  # Vision models expect images here
             "stream": True,
+            "think": False, # disable extended reasoning
             "keep_alive": config.OLLAMA_KEEP_ALIVE,
             "options": {
                 "temperature": 0.1,
