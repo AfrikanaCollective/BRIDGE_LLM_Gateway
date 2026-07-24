@@ -295,10 +295,10 @@ async def generate_with_image(
             "think": False, # disable extended reasoning
             "keep_alive": config.OLLAMA_KEEP_ALIVE,
             "options": {
-                "temperature": 0.1,
-                "top_k": 5,
-                "top_p": 0.9,
-                "repeat_penalty": 1.3,  # penalty discourages repetition loops, 1.0: No repeat penalty variance
+                "temperature": 0, # 0.1
+                "top_k": 1, # 5
+                "top_p": 1.0, # 0.9
+                "repeat_penalty": 1.0,  # 1.3 penalty discourages repetition loops, 1.0: No repeat penalty variance
                 "repeat_last_n": 256,
                 "seed": 42,
                 "num_ctx": 8192,
