@@ -411,13 +411,16 @@ async def generate_with_image(
         try:
             # Attempt JSON parsing
             content = repair_trailing_bare_strings(content)
-            json_response = json.loads(content)
+            # strict=False: tolerate literal control chars (raw \n, \t) inside
+            # string values — the model nests nested JSON as a nested string but
+            # doesn't reliably escape newlines inside it, which strict mode rejects
+            json_response = json.loads(content, strict=False)
             logger.info(f"✓ Parsed response as JSON: {json_response}")
 
             # If it's a dict with a "response" key, extract that value
             if isinstance(json_response, dict) and "response" in json_response:
                 cleaned_response = clean_json_string(json_response.get("response"))
-                content = json.loads(cleaned_response)
+                content = json.loads(cleaned_response, strict=False)
                 logger.info(f"✓ Extracted nested 'response' value: {content}")
             # Otherwise use the whole JSON as-is
             else:
@@ -426,7 +429,7 @@ async def generate_with_image(
 
         except json.JSONDecodeError as e:
             # If not JSON, use the raw response
-
+            logger.warning(f"JSON parse failed: {e}. Raw (first 300 chars): {full_response[:300]!r}")
             content = full_response
             logger.info(f"Response is plain text (not JSON)")
 
