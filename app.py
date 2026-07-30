@@ -175,6 +175,36 @@ def repair_trailing_bare_strings(json_text: str) -> str:
     return "".join(out_tokens)
 
 
+def repair_unescaped_quotes(text: str, max_attempts: int = 50) -> str:
+    """
+    Repair a common LLM JSON bug: a string value/key contains literal,
+    unescaped double quotes (e.g. tick-box labels like "1" copied verbatim
+    from a source document) which breaks the parser mid-string.
+
+    Strategy: attempt json.loads; on a delimiter error caused by a stray
+    quote inside a string span, escape that quote and retry.
+    """
+    for _ in range(max_attempts):
+        try:
+            json.loads(text, strict=False)
+            return text
+        except json.JSONDecodeError as e:
+            if "Expecting ',' delimiter" not in e.msg and "Expecting ':' delimiter" not in e.msg:
+                raise  # different failure mode -- don't mask it
+
+            search_start = max(0, e.pos - 5)
+            snippet = text[search_start:e.pos]
+            quote_idx = None
+            for i in range(len(snippet) - 1, -1, -1):
+                if snippet[i] == '"' and (i == 0 or snippet[i - 1] != '\\'):
+                    quote_idx = search_start + i
+                    break
+            if quote_idx is None:
+                raise
+            text = text[:quote_idx] + '\\"' + text[quote_idx + 1:]
+    raise ValueError("Could not repair JSON after max attempts")
+
+
 # ============================================================
 # STARTUP & SHUTDOWN HANDLERS
 # ============================================================
@@ -411,6 +441,7 @@ async def generate_with_image(
         try:
             # Attempt JSON parsing
             content = repair_trailing_bare_strings(content)
+            content = repair_unescaped_quotes(content)
             # strict=False: tolerate literal control chars (raw \n, \t) inside
             # string values — the model nests nested JSON as a nested string but
             # doesn't reliably escape newlines inside it, which strict mode rejects
