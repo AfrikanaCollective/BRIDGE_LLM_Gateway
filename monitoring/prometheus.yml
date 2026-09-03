@@ -9,5 +9,15 @@ global:
 scrape_configs:
   - job_name: qwen-llm-gateway
     metrics_path: /metrics
+    # The gateway listens on API_PORT (8443 by default, see .env.example)
+    # with HTTPS on by default (USE_HTTPS=True) using the self-signed cert
+    # in certs/ — scrape over https with cert verification off, same as
+    # every curl -k example in the docs. Scraping plain http://gateway:8000
+    # (the original value here) silently failed with connection refused
+    # and an empty Grafana dashboard, since nothing was actually listening
+    # there.
+    scheme: https
+    tls_config:
+      insecure_skip_verify: true
     static_configs:
-      - targets: ["gateway:8000"]
+      - targets: ["gateway:8443"]
