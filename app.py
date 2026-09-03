@@ -51,7 +51,7 @@ try:
     from gateway.api.admin_router import router as gateway_admin_router
     from gateway.api.deps import authenticated_tenant
     from gateway.core.bootstrap import build_gateway_service
-    from gateway.core.exceptions import GatewayError
+    from gateway.core.exceptions import GatewayError, RateLimitExceeded
     from gateway.models.chat import ChatCompletionRequest, ContentPart, Message
     from gateway.models.tenant import ApiKey, Tenant
     GATEWAY_ROUTES_AVAILABLE = True
@@ -61,7 +61,7 @@ except ImportError:
     gateway_admin_router = None
     authenticated_tenant = None
     build_gateway_service = None
-    GatewayError = None
+    GatewayError = RateLimitExceeded = None
     ChatCompletionRequest = ContentPart = Message = None
     Tenant = ApiKey = None
     GATEWAY_ROUTES_AVAILABLE = False
@@ -236,6 +236,27 @@ app.add_middleware(
 if GATEWAY_ROUTES_AVAILABLE:
     app.include_router(gateway_router)
     app.include_router(gateway_admin_router)
+
+    # Without this, a GatewayError raised anywhere on the /v1/* routes
+    # (auth failure in the `authenticated_tenant` dependency, rate limit,
+    # budget, all-providers-down, ...) has no FastAPI handler and becomes
+    # an unhandled exception -> generic 500 "Internal Server Error",
+    # silently defeating the typed-status-code contract those errors exist
+    # for (CLAUDE.md: "No endpoint returns HTTP 200 with an error in the
+    # body" — the flip side of that rule is routes must actually surface
+    # the right non-2xx status, not fall through to a 500). app.py's own
+    # legacy /generate-with-image handler catches GatewayError manually;
+    # this handler covers every route that doesn't (gateway/api/router.py,
+    # gateway/api/admin_router.py).
+    from fastapi import Request
+    from fastapi.responses import JSONResponse
+
+    @app.exception_handler(GatewayError)
+    async def gateway_error_handler(request: Request, exc: GatewayError):
+        headers = {}
+        if isinstance(exc, RateLimitExceeded):
+            headers["Retry-After"] = str(max(1, round(exc.retry_after_seconds)))
+        return JSONResponse(status_code=exc.http_status, content=exc.to_body(), headers=headers)
 
 
 # ============================================================

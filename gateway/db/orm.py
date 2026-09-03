@@ -12,7 +12,7 @@ create_all() in production paths (CLAUDE.md "Migrations").
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Boolean
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -26,13 +26,29 @@ def _uuid_pk() -> Mapped[uuid.UUID]:
     return mapped_column(primary_key=True, default=uuid.uuid4)
 
 
+def _now_utc() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _utc_timestamp_column(**kwargs):
+    """Every datetime column is timezone-aware (TIMESTAMPTZ under Postgres).
+
+    Application code consistently produces `datetime.now(timezone.utc)`
+    (aware) — a plain `DateTime`/`datetime.utcnow` (naive) column type
+    rejects those under Postgres/asyncpg ("can't subtract offset-naive and
+    offset-aware datetimes"), which SQLite silently tolerated. Always use
+    this helper for new datetime columns, not bare `DateTime`.
+    """
+    return mapped_column(DateTime(timezone=True), **kwargs)
+
+
 class TenantORM(Base):
     __tablename__ = "tenants"
 
     id: Mapped[uuid.UUID] = _uuid_pk()
     name: Mapped[str] = mapped_column(String, nullable=False)
     status: Mapped[str] = mapped_column(String, default="active")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = _utc_timestamp_column(default=_now_utc)
 
 
 class ApiKeyORM(Base):
@@ -42,9 +58,9 @@ class ApiKeyORM(Base):
     tenant_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("tenants.id"), nullable=False)
     key_hash: Mapped[str] = mapped_column(String, unique=True, index=True, nullable=False)
     prefix: Mapped[str] = mapped_column(String, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    last_used_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    revoked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = _utc_timestamp_column(default=_now_utc)
+    last_used_at: Mapped[datetime | None] = _utc_timestamp_column(nullable=True)
+    revoked_at: Mapped[datetime | None] = _utc_timestamp_column(nullable=True)
 
 
 class RateLimitPolicyORM(Base):
@@ -87,7 +103,7 @@ class UsageRecordORM(Base):
     latency_ms: Mapped[int] = mapped_column(Integer, default=0)
     failover_attempts: Mapped[int] = mapped_column(Integer, default=0)
     budget_period_key: Mapped[str] = mapped_column(String, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    created_at: Mapped[datetime] = _utc_timestamp_column(default=_now_utc, index=True)
 
 
 class ProviderBackendORM(Base):

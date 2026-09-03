@@ -40,5 +40,5 @@ tenants:
     budget:
       model: "qwen3.5:9b"
       period: daily
-      max_requests: 500
+      max_requests: 10000
       on_exceed: block

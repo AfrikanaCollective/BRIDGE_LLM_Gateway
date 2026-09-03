@@ -86,6 +86,17 @@ async def seed_from_config(path: str | Path = None) -> None:
         await session.commit()
 
 
+async def _main() -> None:
+    await create_all_for_tests()  # dev convenience; use Alembic in prod
+    await seed_from_config()
+
+
 if __name__ == "__main__":
-    asyncio.run(create_all_for_tests())  # dev convenience; use Alembic in prod
-    asyncio.run(seed_from_config())
+    # Single asyncio.run() call, deliberately — the SQLAlchemy async engine
+    # (gateway/db/session.py) is created once at module import time, and
+    # asyncpg binds its connection pool to whatever event loop is running
+    # when the first connection opens. Two separate asyncio.run() calls
+    # here (each spins up its own event loop) made the second call fail
+    # under Postgres with "Future attached to a different loop" — SQLite
+    # tests didn't catch this because aiosqlite doesn't enforce it.
+    asyncio.run(_main())
