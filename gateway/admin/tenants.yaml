@@ -20,7 +20,18 @@ tenants:
     # for production; give it to the web app as QWEN_SERVICE_API_KEY (or
     # whatever its config calls the Authorization bearer token) — it is
     # not read from this file at request time, only at seed time.
-    plaintext_key: gw_dev_replace_me_web_app
+    #
+    # The production key for this tenant has already been generated and
+    # seeded (prefix "gw_live_" — see the running DB's api_keys table for
+    # the prefix/hash; the plaintext is not recoverable from here). Do not
+    # put the real plaintext key back in this file — re-running the seed
+    # script with the placeholder below just creates an ADDITIONAL web-app
+    # tenant with a NEW key, it does not touch or reveal the one already
+    # seeded. The original dev placeholder key that was here before
+    # (gw_dev_replace_me_web_app) has been explicitly revoked — do not put
+    # it back either, since re-seeding it would silently create a fresh,
+    # active (unrevoked) tenant using that already-shared value.
+    plaintext_key: CHANGE_ME_before_reseeding_this_entry
     rate_limit:
       model: "*"
       requests_per_minute: 60
