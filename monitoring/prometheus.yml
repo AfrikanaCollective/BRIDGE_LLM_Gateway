@@ -1,0 +1,13 @@
+# Prometheus scrape config. See ARCHITECTURE.md §8.1 for the metric surface
+# this scrapes (gateway_requests_total, gateway_request_latency_seconds,
+# gateway_backend_health, etc.) exposed at GET /metrics.
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: qwen-llm-gateway
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["gateway:8000"]

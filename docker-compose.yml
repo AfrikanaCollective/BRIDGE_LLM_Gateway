@@ -1,31 +1,104 @@
 version: '3.8'
 
 services:
-  qwen-api:
+  gateway:
     build: .
-    container_name: qwen-api-service
+    container_name: qwen-llm-gateway
     ports:
       - "${API_PORT}:${API_PORT}"
     env_file:
       - .env
     environment:
       - PYTHONUNBUFFERED=1
+      - GATEWAY_REDIS_URL=redis://redis:6379/0
+      - GATEWAY_DATABASE_URL=postgresql+asyncpg://gateway:gateway@postgres:5432/gateway
+      - GATEWAY_OTEL_EXPORTER_OTLP_ENDPOINT=
     volumes:
       - ./certs:/app/certs:ro
       - ./logs:/app/logs
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
     networks:
       - qwen-network
     restart: unless-stopped
     healthcheck:
-      test: [ "CMD", "curl", "-k", "https://localhost:${API_PORT}/health" ]
+      test: [ "CMD", "curl", "-kf", "https://localhost:${API_PORT}/health" ]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 40s
-    # GPU support (if using NVIDIA Docker)
-    # runtime: nvidia
-    # environment:
-    #   - NVIDIA_VISIBLE_DEVICES=all
+    # GPU is not needed by the gateway itself — Ollama runs on the host.
+    # If you containerize Ollama, add `runtime: nvidia` to that service.
+
+  redis:
+    image: redis:7-alpine
+    container_name: qwen-gateway-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      - qwen-network
+    restart: unless-stopped
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: qwen-gateway-postgres
+    environment:
+      - POSTGRES_USER=gateway
+      - POSTGRES_PASSWORD=gateway
+      - POSTGRES_DB=gateway
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - qwen-network
+    restart: unless-stopped
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U gateway" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: qwen-gateway-prometheus
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "9090:9090"
+    networks:
+      - qwen-network
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: qwen-gateway-grafana
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+    networks:
+      - qwen-network
+    restart: unless-stopped
 
 networks:
   qwen-network:
@@ -33,3 +106,7 @@ networks:
 
 volumes:
   logs:
+  redis-data:
+  postgres-data:
+  prometheus-data:
+  grafana-data:

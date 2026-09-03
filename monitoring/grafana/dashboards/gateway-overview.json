@@ -1,0 +1,95 @@
+{
+  "title": "Gateway Overview",
+  "uid": "gateway-overview",
+  "timezone": "utc",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "15s",
+  "time": { "from": "now-1h", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Request rate by status",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "expr": "sum by (status) (rate(gateway_requests_total[5m]))",
+          "legendFormat": "{{status}}"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Latency p50 / p95 / p99",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(gateway_request_latency_seconds_bucket[5m])))",
+          "legendFormat": "p50"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(gateway_request_latency_seconds_bucket[5m])))",
+          "legendFormat": "p95"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(gateway_request_latency_seconds_bucket[5m])))",
+          "legendFormat": "p99"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Rate limit / budget rejections",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "targets": [
+        {
+          "expr": "sum by (tenant) (rate(gateway_rate_limit_rejections_total[5m]))",
+          "legendFormat": "rate_limited: {{tenant}}"
+        },
+        {
+          "expr": "sum by (tenant) (rate(gateway_budget_rejections_total[5m]))",
+          "legendFormat": "budget: {{tenant}}"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Backend health",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "targets": [
+        {
+          "expr": "gateway_backend_health",
+          "legendFormat": "{{backend_id}} / {{model}}"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Failover attempts",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "targets": [
+        {
+          "expr": "sum by (model, from_backend, to_backend) (rate(gateway_failover_attempts_total[5m]))",
+          "legendFormat": "{{model}}: {{from_backend}} -> {{to_backend}}"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "Token throughput",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+      "targets": [
+        {
+          "expr": "sum by (kind) (rate(gateway_tokens_total[5m]))",
+          "legendFormat": "{{kind}}"
+        }
+      ]
+    }
+  ]
+}

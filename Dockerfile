@@ -29,18 +29,13 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application
-COPY app.py config.py ./
+COPY app.py config.py pytest.ini ./
 
-# Copy clients package (entire directory)
-COPY clients/ ./clients/
+# Copy the LLM gateway package (entire directory)
+COPY gateway/ ./gateway/
 
-# Copy prompts package (entire directory)
-COPY prompts/ ./prompts/
-
-# Copy agents package (entire directory)
-COPY agents/ ./agents/
-
-# Copy utils package (entire directory)
+# Copy utils package (entire directory) — generic LLM-response JSON repair
+# used by app.py's legacy /generate-with-image handler (ARCHITECTURE.md §9)
 COPY utils/ ./utils/
 
 # Copy tests package (entire directory)

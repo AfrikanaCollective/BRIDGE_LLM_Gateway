@@ -1,0 +1,50 @@
+# Model -> ordered backend list, and backend -> base_url.
+# See ARCHITECTURE.md §6.1/§6.5. Loaded once at startup by
+# gateway.routing.registry.BackendRegistry.from_yaml — no hot-reload in v1.
+#
+# "priority: 0" is tried first; the gateway fails over to the next entry
+# for a model (up to GATEWAY_MAX_FAILOVER_ATTEMPTS) if a backend is
+# unhealthy, circuit-open, or errors before returning any output.
+#
+# This chain is heterogeneous by necessity, not by design choice: the three
+# boxes below don't run the same model. A request for "qwen3.5:9b" that
+# fails over past the primary is served by qwen3.6:35b or qwen3.8:27b-q4_K_M
+# instead — a different model, on different hardware. `model_name` on a
+# routing entry is what makes that possible: it's the model actually
+# requested from THAT backend, overriding the top-level "qwen3.5:9b" key
+# (which is what tenants request and are rate-limited/budgeted against —
+# see gateway/models/provider.py's target_model and
+# ChatCompletionResponse.model in gateway/models/chat.py for how callers
+# find out which model actually answered).
+#
+# Operational note: qwen3.6:35b and qwen3.8:27b-q4_K_M are larger/different
+# models than the primary — expect different latency and output
+# characteristics on failover, not just "the same thing on a backup box."
+# Keep `keep_alive` high on all three; a cold secondary adds full model-load
+# latency on top of being a different model (ARCHITECTURE.md §6.4).
+
+backends:
+  ollama-primary:
+    base_url: http://172.17.0.1:11434
+    enabled: true
+    keep_alive: 5m
+  ollama-secondary-1:
+    base_url: http://172.16.13.67:11434
+    enabled: true
+    keep_alive: 5m
+  ollama-secondary-2:
+    base_url: http://172.18.0.1:11434
+    enabled: true
+    keep_alive: 5m
+
+models:
+  "qwen3.5:9b":
+    - backend: ollama-primary
+      priority: 0
+      # no model_name override — this backend mirrors the requested model
+    - backend: ollama-secondary-1
+      model_name: "qwen3.6:35b"
+      priority: 1
+    - backend: ollama-secondary-2
+      model_name: "qwen3.8:27b-q4_K_M"
+      priority: 2

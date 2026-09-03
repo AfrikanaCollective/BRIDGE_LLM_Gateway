@@ -1,5 +1,3 @@
-import io
-import re
 import ssl
 import json
 import base64
@@ -10,10 +8,15 @@ from datetime import datetime
 from pathlib import Path
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, File, UploadFile, Form, HTTPException
+from fastapi import Depends, FastAPI, File, UploadFile, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
-from clients.image_generation import strip_markdown_code_blocks
+from utils.clean_gen_response_from_image import (
+    strip_markdown_code_blocks,
+    clean_json_string,
+    repair_trailing_bare_strings,
+    repair_unescaped_quotes,
+)
 
 # Import your config
 from config import Config
@@ -27,17 +30,47 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# ============================================================
+# GATEWAY MOUNTING (see ARCHITECTURE.md §9/§11)
+# ------------------------------------------------------------
+# The gateway (gateway/) is the single choke point every LLM request goes
+# through — including this file's own /generate-with-image handler below,
+# which delegates to GatewayService.handle_request() instead of calling
+# Ollama directly. The ITF/NAR pipeline that used to call this in-process
+# has been removed from this repo; the caller today is a separate,
+# external web app reaching this endpoint over HTTP (see the code snippet
+# in the PR/commit that made this change) — so this handler now requires a
+# real `Authorization: Bearer <api_key>` header and resolves a real tenant,
+# same as every other gateway route. GATEWAY_ROUTES_AVAILABLE also gates
+# this handler: if the gateway package can't even be imported (missing
+# deps), there is no second, insecure path to Ollama to fall back to — the
+# handler returns 503 instead (see generate_with_image below).
+# ============================================================
 try:
-    from clients.image_generation import generate_with_image_async
-    logger.info("✅ Image generation clients loaded successfully")
+    from gateway.api.router import router as gateway_router
+    from gateway.api.admin_router import router as gateway_admin_router
+    from gateway.api.deps import authenticated_tenant
+    from gateway.core.bootstrap import build_gateway_service
+    from gateway.core.exceptions import GatewayError
+    from gateway.models.chat import ChatCompletionRequest, ContentPart, Message
+    from gateway.models.tenant import ApiKey, Tenant
+    GATEWAY_ROUTES_AVAILABLE = True
 except ImportError:
-    logger.warning("⚠️ Image generation clients not available (optional)")
-    generate_with_image_async = None
+    logger.warning("⚠️ Gateway not available yet (gateway/ dependencies not installed)")
+    gateway_router = None
+    gateway_admin_router = None
+    authenticated_tenant = None
+    build_gateway_service = None
+    GatewayError = None
+    ChatCompletionRequest = ContentPart = Message = None
+    Tenant = ApiKey = None
+    GATEWAY_ROUTES_AVAILABLE = False
 
 # App state for managing async resources
 app_state = {
     "client_session": None,
-    "semaphore": None
+    "semaphore": None,
+    "gateway_runtime": None,  # gateway.core.bootstrap.GatewayRuntime, once built
 }
 
 
@@ -103,106 +136,11 @@ def get_uvicorn_ssl_config():
     return str(key_path), str(cert_path)
 
 
-def clean_json_string(s):
-    """Remove section headers and fix malformed JSON"""
-
-    # Remove section headers like "A: Mother's details", "B: Labour and Birth"
-    s = re.sub(r'",\s*"[A-Z]:\s+[^"]*"', '"', s)
-    s = re.sub(r'",\s*"[A-Z]:\s+[^"]+"', '"', s)
-
-    # Fix escaped quotes in values
-    s = s.replace("\\'", "'")
-
-    return s
-
-
-def repair_trailing_bare_strings(json_text: str) -> str:
-    """
-    Repairs LLM-generated JSON where a key's value is followed by
-    additional un-keyed ("bare") string literals before the next real
-    "key": pair, e.g.:
-
-        "K: Action plan": "step 1", "step 2", "step 3", "Next key": "value"
-
-    All bare strings following a key's value are merged into that
-    value (joined by \\n), continuing until either:
-      - a string token that is itself followed by a colon (a real key), or
-      - the enclosing object/array closes.
-    """
-    # Tokenize into quoted strings and structural characters.
-    token_pattern = re.compile(r'"(?:[^"\\]|\\.)*"|[{}\[\],:]')
-    tokens = token_pattern.findall(json_text)
-
-    def is_str(tok: str) -> bool:
-        return tok.startswith('"')
-
-    out_tokens = []
-    i, n = 0, len(tokens)
-
-    while i < n:
-        tok = tokens[i]
-        out_tokens.append(tok)
-
-        # Look for a completed "key": "value" pair
-        if (
-            is_str(tok)
-            and i + 2 < n
-            and tokens[i + 1] == ":"
-            and is_str(tokens[i + 2])
-        ):
-            out_tokens.append(tokens[i + 1])  # the colon
-            merged_value = json.loads(tokens[i + 2])  # unescape the value string
-
-            j = i + 3
-            # Keep consuming ", "<bare string>" as long as that string
-            # is NOT itself followed by a colon (which would make it a key)
-            while (
-                j + 1 < n
-                and tokens[j] == ","
-                and is_str(tokens[j + 1])
-                and not (j + 2 < n and tokens[j + 2] == ":")
-            ):
-                bare_str = json.loads(tokens[j + 1])
-                merged_value += "\n" + bare_str
-                j += 2  # consumed the comma + the bare string
-
-            out_tokens.append(json.dumps(merged_value))  # re-escape merged value
-            i = j
-            continue
-
-        i += 1
-
-    return "".join(out_tokens)
-
-
-def repair_unescaped_quotes(text: str, max_attempts: int = 50) -> str:
-    """
-    Repair a common LLM JSON bug: a string value/key contains literal,
-    unescaped double quotes (e.g. tick-box labels like "1" copied verbatim
-    from a source document) which breaks the parser mid-string.
-
-    Strategy: attempt json.loads; on a delimiter error caused by a stray
-    quote inside a string span, escape that quote and retry.
-    """
-    for _ in range(max_attempts):
-        try:
-            json.loads(text, strict=False)
-            return text
-        except json.JSONDecodeError as e:
-            if "Expecting ',' delimiter" not in e.msg and "Expecting ':' delimiter" not in e.msg:
-                raise  # different failure mode -- don't mask it
-
-            search_start = max(0, e.pos - 5)
-            snippet = text[search_start:e.pos]
-            quote_idx = None
-            for i in range(len(snippet) - 1, -1, -1):
-                if snippet[i] == '"' and (i == 0 or snippet[i - 1] != '\\'):
-                    quote_idx = search_start + i
-                    break
-            if quote_idx is None:
-                raise
-            text = text[:quote_idx] + '\\"' + text[quote_idx + 1:]
-    raise ValueError("Could not repair JSON after max attempts")
+# clean_json_string / repair_trailing_bare_strings / repair_unescaped_quotes
+# live in utils/clean_gen_response_from_image.py (ARCHITECTURE.md §9) — generic
+# LLM-response JSON repair for the legacy /generate-with-image contract,
+# applied to the raw string GatewayService returns; not gateway code
+# (CLAUDE.md: gateway/ stays domain-agnostic).
 
 
 # ============================================================
@@ -216,11 +154,9 @@ async def lifespan(app: FastAPI):
     logger.info("=" * 60)
     logger.info("🚀 STARTING UP...")
     logger.info("=" * 60)
-    logger.info(f"📡 Ollama URL: {config.OLLAMA_BASE_URL}")
-    logger.info(f"🤖 Model: {config.MODEL_NAME}")
+    logger.info(f"🤖 Default model: {config.MODEL_NAME} (backend routing/failover: gateway/admin/routing.yaml)")
     logger.info(f"🔒 HTTPS Enabled: {config.USE_HTTPS}")
     logger.info(f"⚙️  Max Concurrent Requests: {config.MAX_CONCURRENT_REQUESTS}")
-    logger.info(f"⏱️  Request Timeout: {config.REQUEST_TIMEOUT}s")
 
     # Create SSL context for Ollama communication
     ssl_context = get_ssl_context()
@@ -237,11 +173,31 @@ async def lifespan(app: FastAPI):
             read_bufsize=15 * 1024 * 1024,  # 15MB buffer
         )
 
-    # Create semaphore for concurrent request limiting
+    # Create semaphore for concurrent request limiting — this caps total
+    # concurrent generations across ALL tenants (protects the shared GPU),
+    # distinct from and in addition to the gateway's per-tenant rate limits.
     app_state["semaphore"] = asyncio.Semaphore(config.MAX_CONCURRENT_REQUESTS)
 
     logger.info(f"✅ aiohttp ClientSession initialized")
     logger.info(f"✅ Semaphore set to {config.MAX_CONCURRENT_REQUESTS} concurrent requests")
+
+    # Build the gateway (redis, DB, routing, circuit breaker, health poller)
+    # and wire it up so /generate-with-image below can call
+    # GatewayService.handle_request() instead of Ollama directly — see
+    # ARCHITECTURE.md §9. If gateway infra (Redis/Postgres) isn't reachable,
+    # this is caught rather than crashing the whole process: the legacy
+    # endpoint reports 503 (see generate_with_image) instead of silently
+    # falling back to a second, unmetered path to Ollama.
+    if GATEWAY_ROUTES_AVAILABLE:
+        try:
+            runtime = await build_gateway_service(app_state["client_session"])
+            app_state["gateway_runtime"] = runtime
+            app.state.gateway_service = runtime.service
+            logger.info("✅ Gateway service initialized (routing + rate limits ready; callers must authenticate)")
+        except Exception as e:
+            logger.error(f"❌ Gateway service failed to initialize: {e}", exc_info=True)
+            logger.warning("⚠️ /generate-with-image and /v1/* routes will return 503 until this is fixed")
+
     logger.info("=" * 60)
 
     yield
@@ -250,6 +206,9 @@ async def lifespan(app: FastAPI):
     logger.info("=" * 60)
     logger.info("🛑 SHUTTING DOWN...")
     logger.info("=" * 60)
+    if app_state["gateway_runtime"]:
+        await app_state["gateway_runtime"].shutdown()
+        logger.info("✅ Gateway runtime shut down")
     if app_state["client_session"]:
         await app_state["client_session"].close()
         logger.info("✅ aiohttp ClientSession closed")
@@ -272,6 +231,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Mount gateway routes (auth/rate-limit/budget/failover-backed) alongside
+# the legacy endpoints below. See the GATEWAY MOUNTING note above.
+if GATEWAY_ROUTES_AVAILABLE:
+    app.include_router(gateway_router)
+    app.include_router(gateway_admin_router)
+
 
 # ============================================================
 # HEALTH CHECK
@@ -288,197 +253,154 @@ async def health():
     }
 
 
+if GATEWAY_ROUTES_AVAILABLE:
+    @app.get("/metrics")
+    async def metrics():
+        """Prometheus scrape endpoint. See ARCHITECTURE.md §8.1."""
+        from fastapi import Response
+        from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
+        return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
+
+
 # ============================================================
 # IMAGE GENERATION WITH TEXT
 # ============================================================
+
+async def _unavailable_tenant_dep():
+    """Stand-in auth dependency used only when gateway/ failed to import —
+    keeps the route signature valid while still failing closed with 503
+    (never silently skips auth)."""
+    raise HTTPException(status_code=503, detail="Gateway is not available")
+
+
+_generate_with_image_auth_dep = authenticated_tenant if GATEWAY_ROUTES_AVAILABLE else _unavailable_tenant_dep
+
 
 @app.post("/generate-with-image")
 async def generate_with_image(
         image: UploadFile = File(...),
         prompt: str = Form(...),
+        tenant_and_key: tuple = Depends(_generate_with_image_auth_dep),
 ):
-    """Generate response based on image and text prompt"""
-    try:
-        # Read and encode image
-        image_data = await image.read()
+    """Generate response based on image and text prompt.
 
-        image_base64 = base64.b64encode(image_data).decode('utf-8')
+    Legacy-shaped response contract (`{response, model, timestamp,
+    metrics}`), kept for the external web app that already calls this path
+    (see ARCHITECTURE.md §9). Delegates to GatewayService.handle_request()
+    instead of calling Ollama directly, and requires a real
+    `Authorization: Bearer <api_key>` header — this is a genuinely external
+    caller now (the in-process ITF/NAR pipeline that used to call this was
+    removed from this repo), so it authenticates like any other gateway
+    tenant. No bypass (CLAUDE.md hard rule): a missing/invalid key gets a
+    401 here exactly like it would on `/v1/generate-with-image`.
+    """
+    if not GATEWAY_ROUTES_AVAILABLE or app_state["gateway_runtime"] is None:
+        # No second, unmetered path to Ollama to fall back to — see the
+        # GATEWAY MOUNTING note near the top of this file.
+        raise HTTPException(status_code=503, detail="Gateway is not available")
 
-        # Determine image type
-        ext = image.filename.split('.')[-1].lower()
-        media_type = "image/jpeg" if ext in ["jpg", "jpeg"] else f"image/{ext}"
+    tenant, api_key = tenant_and_key
+    runtime = app_state["gateway_runtime"]
 
-        logger.info(f"Processing image: {image.filename} ({media_type})")
-        logger.info(f"Image size: {len(image_data) / (1024 * 1024) :.2f} MBs")
+    # Bug fix carried over from the design review (PRD.md §10b): this limit
+    # was defined in config.py but never actually enforced anywhere.
+    image_data = await image.read()
+    max_bytes = config.MAX_IMAGE_SIZE_MB * 1024 * 1024
+    if len(image_data) > max_bytes:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Image is {len(image_data) / 1024 / 1024:.1f}MB, exceeds {config.MAX_IMAGE_SIZE_MB}MB limit",
+        )
 
-        # Qwen 3.5:9B format - simpler structure
-        # The trick: use a string content with special image token format
-        # OR pass image separately in images field
+    image_base64 = base64.b64encode(image_data).decode("utf-8")
+    ext = (image.filename or "").rsplit(".", 1)[-1].lower()
+    media_type = "image/jpeg" if ext in ("jpg", "jpeg") else f"image/{ext or 'png'}"
 
-        # Use /api/generate endpoint for vision models with images
+    logger.info(f"Processing image: {image.filename} ({media_type})")
+    logger.info(f"Image size: {len(image_data) / (1024 * 1024):.2f} MBs")
 
-        payload = {
-            "model": config.MODEL_NAME,
-            "prompt": prompt,
-            "images": [image_base64],  # Vision models expect images here
-            "stream": True,
-            "think": False, # disable extended reasoning
-            "keep_alive": config.OLLAMA_KEEP_ALIVE,
-            "options": {
-                "temperature": 0, # 0.1
-                "top_k": 1, # 5
-                "top_p": 1.0, # 0.9
-                "repeat_penalty": 1.0,  # 1.3 penalty discourages repetition loops, 1.0: No repeat penalty variance
-                "repeat_last_n": 256,
-                "seed": 42,
-                "num_ctx": 8192,
-                "num_predict": 4096,  # hard cap on generated tokens
-            }
-        }
-
-        logger.info(f"Sending request to Ollama: {config.OLLAMA_BASE_URL}/api/generate")
-        logger.debug(f"Payload: model={payload['model']}, image_size={len(image_base64)}, prompt_length={len(prompt)}")
-
-        try:
-            # Make request with semaphore
-            async with app_state["semaphore"]:
-                async with app_state["client_session"].post(
-                        f"{config.OLLAMA_BASE_URL}/api/generate",
-                        json=payload,
-                        timeout=aiohttp.ClientTimeout(
-                            # connect=60,
-                            total=config.REQUEST_TIMEOUT,
-                            # sock_read=600  # Key setting for slow endpoints
-                        )
-                ) as response:
-
-                    if response.status != 200:
-                        error_text = await response.text()
-                        logger.error(f"Ollama error: {response.status} - {error_text}")
-                        raise HTTPException(
-                            status_code=response.status,
-                            detail=f"Ollama error: {error_text}"
-                        )
-
-                    # ============================================
-                    # PARSE STREAMING NDJSON
-                    # ============================================
-                    full_response = ""
-                    metrics = {}
-                    chunk_count = 0
-                    chunk = None
-                    parse_failures = 0
-
-                    async for line in response.content:
-                        if not line:
-                            continue
-
-                        try:
-                            chunk = json.loads(line)
-                            full_response += chunk.get("response", "")
-                            chunk_count += 1
-
-                            # Log streaming progress
-                            if chunk_count % 10 == 0:
-                                logger.debug(
-                                    f"Streaming... {chunk_count} chunks, {len(full_response)} chars")
-
-                            # Check if generation complete
-                            if chunk.get("done"):
-                                metrics = {
-                                    "total_duration": round(chunk.get("total_duration", 0) / 1_000_000_000, 2),
-                                    "load_duration": round(chunk.get("load_duration", 0) / 1_000_000_000, 2),
-                                    "prompt_eval_count": chunk.get("prompt_eval_count", 0),
-                                    "prompt_eval_duration": round(
-                                        chunk.get("prompt_eval_duration", 0) / 1_000_000_000, 2),
-                                    "eval_count": chunk.get("eval_count", 0),
-                                    "eval_duration": round(chunk.get("eval_duration", 0) / 1_000_000_000, 2),
-                                    "done_reason": chunk.get("done_reason"),
-                                }
-                                logger.info(f"✓ Generation complete: {chunk_count}")
-                                logger.info(f"  Metrics: {metrics}")
-
-                                if metrics["done_reason"] == "length":
-                                    logger.warning(
-                                        f"⚠️ Generation hit num_predict limit (eval_count={metrics['eval_count']}) "
-                                        f"without a natural stop — possible repetition loop even after tuning."
-                                    )
-                                break
-
-                        except json.JSONDecodeError as e:
-                            parse_failures += 1
-                            logger.warning(
-                                f"Failed to parse JSON line #{chunk_count + parse_failures}: {repr(line[:200])} | error: {e}")
-                            continue
-
-        except asyncio.TimeoutError:
-            logger.error(
-                f"⏱️ Timed out while streaming from Ollama after {chunk_count} chunks "
-                f"({len(full_response)} chars received so far)"
+    chat_request = ChatCompletionRequest(
+        model=config.MODEL_NAME,
+        messages=[
+            Message(
+                role="user",
+                content=[
+                    ContentPart(type="text", text=prompt),
+                    ContentPart(type="image_base64", image_base64=image_base64, media_type=media_type),
+                ],
             )
-            response_data = {
-                "response": "Time out error",
-                "model": config.MODEL_NAME,
-                "timestamp": datetime.now().isoformat(),
-                "metrics": metrics,
-            }
-            return response_data
+        ],
+    )
 
-        # ============================================
-        # POST-PROCESS & RETURN
-        # ============================================
-        full_response = full_response.strip()
+    try:
+        # Semaphore still bounds total concurrent GPU load across all
+        # tenants; the gateway's per-tenant token bucket is a separate,
+        # additional layer (see the lifespan comment above).
+        async with app_state["semaphore"]:
+            result = await runtime.service.handle_request(
+                tenant=tenant,
+                api_key=api_key,
+                request=chat_request,
+            )
+    except GatewayError as exc:
+        # Typed errors map to real status codes — no 200-with-error-body
+        # (the old timeout-returns-200 bug this replaces, PRD.md §10a).
+        logger.error(f"Gateway error in generate_with_image: {exc.message}")
+        raise HTTPException(status_code=exc.http_status, detail=exc.message)
 
-        if not full_response:
-            logger.warning(f"Empty response from model. Last chunk: {chunk}")
-            full_response = "No response generated from model."
+    # ============================================
+    # POST-PROCESS & RETURN — generic LLM-response JSON repair applied to
+    # GatewayService's raw string output, not gateway logic; see
+    # utils/clean_gen_response_from_image.py.
+    # ============================================
+    full_response = result.content.strip()
 
-        # ✅ TRY TO PARSE AS JSON (for structured extractions)
+    if not full_response:
+        logger.warning("Empty response from model.")
+        full_response = "No response generated from model."
+
+    content = strip_markdown_code_blocks(full_response)
+
+    try:
+        content = repair_trailing_bare_strings(content)
+        content = repair_unescaped_quotes(content)
+        # strict=False: tolerate literal control chars (raw \n, \t) inside
+        # string values — the model nests nested JSON as a nested string but
+        # doesn't reliably escape newlines inside it, which strict mode rejects
+        json_response = json.loads(content, strict=False)
+        logger.info(f"✓ Parsed response as JSON: {json_response}")
+
+        if isinstance(json_response, dict) and "response" in json_response:
+            cleaned_response = clean_json_string(json_response.get("response"))
+            content = json.loads(cleaned_response, strict=False)
+            logger.info(f"✓ Extracted nested 'response' value: {content}")
+        else:
+            content = json.dumps(json_response, indent=2)
+            logger.info(f"✓ Using full JSON response (not nested)")
+
+    except json.JSONDecodeError as e:
+        logger.warning(f"JSON parse failed: {e}. Raw (first 300 chars): {full_response[:300]!r}")
         content = full_response
-        # Strip markdown code blocks if present
-        content = strip_markdown_code_blocks(content)
+        logger.info(f"Response is plain text (not JSON)")
 
-        try:
-            # Attempt JSON parsing
-            content = repair_trailing_bare_strings(content)
-            content = repair_unescaped_quotes(content)
-            # strict=False: tolerate literal control chars (raw \n, \t) inside
-            # string values — the model nests nested JSON as a nested string but
-            # doesn't reliably escape newlines inside it, which strict mode rejects
-            json_response = json.loads(content, strict=False)
-            logger.info(f"✓ Parsed response as JSON: {json_response}")
+    if result.finish_reason == "length":
+        logger.warning(
+            f"⚠️ Generation hit num_predict limit (completion_tokens={result.usage.completion_tokens}) "
+            f"without a natural stop — possible repetition loop even after tuning."
+        )
 
-            # If it's a dict with a "response" key, extract that value
-            if isinstance(json_response, dict) and "response" in json_response:
-                cleaned_response = clean_json_string(json_response.get("response"))
-                content = json.loads(cleaned_response, strict=False)
-                logger.info(f"✓ Extracted nested 'response' value: {content}")
-            # Otherwise use the whole JSON as-is
-            else:
-                content = json.dumps(json_response, indent=2)
-                logger.info(f"✓ Using full JSON response (not nested)")
-
-        except json.JSONDecodeError as e:
-            # If not JSON, use the raw response
-            logger.warning(f"JSON parse failed: {e}. Raw (first 300 chars): {full_response[:300]!r}")
-            content = full_response
-            logger.info(f"Response is plain text (not JSON)")
-
-        # Format response
-        response_data = {
-            "response": content,
-            "model": config.MODEL_NAME,
-            "timestamp": datetime.now().isoformat(),
-            "metrics": metrics
-        }
-
-        return response_data
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error in generate_with_image: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+    return {
+        "response": content,
+        "model": result.model,
+        "timestamp": datetime.now().isoformat(),
+        "metrics": {
+            "backend_used": result.backend_used,
+            "latency_ms": result.latency_ms,
+            "prompt_eval_count": result.usage.prompt_tokens,
+            "eval_count": result.usage.completion_tokens,
+            "done_reason": result.finish_reason,
+        },
+    }
 
 
 # ============================================================
@@ -494,7 +416,11 @@ async def root():
         "https_enabled": config.USE_HTTPS,
         "endpoints": {
             "health": "GET /health",
+            "metrics": "GET /metrics",
             "image_analysis": "POST /generate-with-image",
+            "chat_completions": "POST /v1/chat/completions",
+            "generate_with_image_v1": "POST /v1/generate-with-image",
+            "usage": "GET /v1/usage",
             "interactive_docs": "GET /docs",
             "openapi_schema": "GET /openapi.json"
         }
@@ -537,5 +463,10 @@ if __name__ == "__main__":
         exit(1)
 
 
-# curl -k -X POST https://localhost:8443/generate-with-image -F "image=@$(realpath ./ITF_72000767_page_1.png)" \
-# -F "prompt=What do you see in this image?" > response.json
+# curl -k -X POST https://localhost:8443/generate-with-image \
+#   -H "Authorization: Bearer <api_key>" \
+#   -F "image=@$(realpath ./example.png)" \
+#   -F "prompt=What do you see in this image?" > response.json
+#
+# <api_key> comes from `python -m gateway.admin.seed` — see
+# gateway/admin/tenants.yaml and README.md "Provisioning a tenant".

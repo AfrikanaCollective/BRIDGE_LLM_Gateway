@@ -1,0 +1,44 @@
+# Seed data for tenants, API keys, and policies — read by
+# gateway.admin.seed.seed_from_config() at startup/migration time.
+# v1 has no self-serve CRUD API for this (PRD.md §10c); edit this file and
+# re-run the seed script (`python -m gateway.admin.seed`) to add/change a
+# tenant.
+#
+# `plaintext_key` here is ONLY used at seed time to compute key_hash; it is
+# never persisted in plaintext and this file should not be committed with
+# real production keys (use a secrets-managed copy in real deployments —
+# this checked-in version is dev/example data only).
+#
+# There is no internal/implicit tenant — every caller of this gateway,
+# including the separate web app that calls /generate-with-image (see
+# ARCHITECTURE.md §9), authenticates as one of the tenants below.
+
+tenants:
+  - name: web-app
+    # This is the tenant the external web app authenticates as when it
+    # calls POST /generate-with-image (and/or /v1/*). Generate a real key
+    # for production; give it to the web app as QWEN_SERVICE_API_KEY (or
+    # whatever its config calls the Authorization bearer token) — it is
+    # not read from this file at request time, only at seed time.
+    plaintext_key: gw_dev_replace_me_web_app
+    rate_limit:
+      model: "*"
+      requests_per_minute: 60
+      burst: 10
+    budget:
+      model: "*"
+      period: monthly
+      max_tokens: 2000000
+      on_exceed: warn
+
+  - name: example-external-tenant
+    plaintext_key: gw_dev_replace_me_external
+    rate_limit:
+      model: "qwen3.5:9b"
+      requests_per_minute: 30
+      burst: 5
+    budget:
+      model: "qwen3.5:9b"
+      period: daily
+      max_requests: 500
+      on_exceed: block

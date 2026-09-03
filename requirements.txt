@@ -7,3 +7,24 @@ aiohttp==3.9.1
 pyyaml==6.0.1
 python-multipart==0.0.6
 Pillow==10.1.0
+
+# --- LLM Gateway ---
+pydantic-settings==2.1.0
+redis==5.0.1
+SQLAlchemy==2.0.25
+greenlet==3.0.3  # required by SQLAlchemy's async engine at runtime
+aiosqlite==0.19.0
+asyncpg==0.29.0
+alembic==1.13.1
+prometheus-client==0.19.0
+opentelemetry-api==1.22.0
+opentelemetry-sdk==1.22.0
+opentelemetry-exporter-otlp-proto-grpc==1.22.0
+
+# --- Tests ---
+pytest==7.4.4
+pytest-asyncio==0.23.3
+fakeredis==2.20.1
+lupa==2.1  # fakeredis needs this for EVAL/EVALSHA (Lua) support used by
+           # gateway/ratelimit/token_bucket.py's tests. Real Redis doesn't
+           # need lupa — only the in-memory fake used by tests does.
