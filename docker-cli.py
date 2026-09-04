@@ -164,8 +164,8 @@ class DockerCLI:
         self.env_config = EnvConfig(self.project_root)
 
         # Docker settings (fixed)
-        self.image_name = "qwen-api-service"
-        self.container_name = "qwen-api-service"
+        self.image_name = "qwen-llm-gateway"
+        self.container_name = "qwen-llm-gateway"
 
         # Load from .env
         self.port = self.env_config.get_int("API_PORT", 8000)

@@ -31,7 +31,7 @@ tenants:
     # (gw_dev_replace_me_web_app) has been explicitly revoked — do not put
     # it back either, since re-seeding it would silently create a fresh,
     # active (unrevoked) tenant using that already-shared value.
-    plaintext_key: CHANGE_ME_before_reseeding_this_entry
+    plaintext_key: gw_live_replace_me_external
     rate_limit:
       model: "*"
       requests_per_minute: 60
