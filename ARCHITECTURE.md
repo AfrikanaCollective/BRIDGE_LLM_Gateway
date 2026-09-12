@@ -1,8 +1,9 @@
 # Architecture — Qwen LLM Gateway
 
 **Companion to**: PRD.md (product requirements) · ARCHITECTURE-ESSENTIALS.md (condensed reference)
-**Status**: Draft v2 (post design-review, see §12)
-**Last updated**: 2026-09-03
+**Status**: Draft v3 (post design-review, see §12; added embedding-model
+support and evaluated-but-deferred reranker support, see §13/§14)
+**Last updated**: 2026-09-12
 
 This document is the complete technical design. If you're an agent working
 in this repo and don't need the full detail, read ARCHITECTURE-ESSENTIALS.md
@@ -22,7 +23,7 @@ day-to-day implementation decisions.
 | Observability — metrics | **Prometheus** (`prometheus-client`) | Pull-based, pairs with Grafana, near-zero overhead. |
 | Observability — tracing | **OpenTelemetry** (SDK + OTLP exporter), scoped to 2 spans/request | See §12(c) — deliberately not instrumenting everything. |
 | Dashboards | **Grafana**, provisioned via config (not manual clicking) | Datasource + dashboard JSON checked into `monitoring/`. |
-| Providers | **Ollama** (one adapter, 3 backend instances, heterogeneous models — §6.5) | Matches current deployment; see PRD §10(c) for why cloud providers aren't in v1. |
+| Providers | **Ollama** (one adapter, 3 backend instances, heterogeneous models — §6.5). `OllamaProvider` implements two capability ABCs — `LLMProvider` (chat/vision, `/api/generate`) and `EmbeddingProvider` (embeddings, `/api/embed`, §13). | Matches current deployment; see PRD §10(c) for why cloud providers aren't in v1. A reranking capability was evaluated and not added — it needs a non-Ollama backend, see §14. |
 | Deploy | **Docker Compose** | The gateway/infra stack runs on one box; the 3 Ollama backends are separate hosts reached over the network (§10) — not containerized by this stack. See PRD §10(c) for why not Kubernetes. |
 | Config | **pydantic-settings** | Typed env-var config for `gateway/`. `app.py`'s FastAPI app shell keeps a small, separate `config.Config` class (SSL, host/port, the legacy handler's default model) — see §9/§11. |
 
@@ -42,12 +43,14 @@ day-to-day implementation decisions.
 │                                                                          │
 │   api/router.py                                                        │
 │     POST /v1/chat/completions                                          │
+│     POST /v1/embeddings            (§13)                               │
 │     POST /v1/generate-with-image   (legacy-shaped adapter)             │
 │     GET  /v1/usage                                                     │
 │     GET  /health  /healthz/ready  /metrics                             │
 │         │                                                               │
 │         ▼                                                               │
-│   core/service.py :: GatewayService.handle_request()                   │
+│   core/service.py :: GatewayService.handle_request() /                 │
+│                       .handle_embedding_request()  →  shared _dispatch()│
 │         │                                                               │
 │    1.   ▼  auth/api_keys.py         → resolve Tenant, or 401            │
 │    2.   ▼  ratelimit/token_bucket.py → check+consume, or 429            │
@@ -110,6 +113,12 @@ day-to-day implementation decisions.
    queue), never blocking the response on the DB write.
 8. **Metrics + response** — record Prometheus observations, return the
    response (or a typed `GatewayError` mapped to the right HTTP status).
+
+Steps 1-2 and 4-8 above are implemented once, in `GatewayService.
+_dispatch()`, and shared verbatim by both chat (`handle_request()`) and
+embedding (`handle_embedding_request()`) requests — see §13.5. Step 3's
+worst-case estimate is the one place the two differ: `num_predict` for
+chat, a character-count heuristic for embeddings (§13.6).
 
 ## 4. Data Models
 
@@ -257,6 +266,11 @@ class ChatCompletionResponse(BaseModel):
     latency_ms: int
 ```
 
+See §13.4 for the parallel `EmbeddingRequest`/`EmbeddingResponse` schema
+(`gateway/models/embedding.py`) — deliberately not a variant of
+`ChatCompletionRequest`, since embeddings have no messages/temperature/
+num_predict and return vectors, not text.
+
 ### 4.6 Errors (`gateway/core/exceptions.py`)
 
 ```python
@@ -328,6 +342,12 @@ models:
 `GATEWAY_MAX_FAILOVER_ATTEMPTS` must be `>=` the longest chain here (3) or
 trailing entries are silently never tried — see `gateway/config.py`.
 
+`routing.yaml` has a second, parallel top-level section,
+`embedding_models:`, same shape as `models:` above, for embedding models
+(currently one entry, `qllama/bge-large-en-v1.5:latest`, single backend,
+no failover chain configured) — see §13.3 for why this is a separate
+section rather than another entry under `models:`.
+
 ### 6.2 Health checks
 
 A background task polls each backend every `HEALTH_CHECK_INTERVAL_S`
@@ -335,7 +355,9 @@ A background task polls each backend every `HEALTH_CHECK_INTERVAL_S`
 configured to serve (e.g. `num_predict=1`), not just `GET /api/tags`. A
 backend that's reachable but has evicted the model from VRAM must fail this
 check — a liveness-only ping would report it healthy right up until a real
-request hangs for the full timeout (PRD §10a).
+request hangs for the full timeout (PRD §10a). Embedding-model backends get
+the same treatment via a real `embed()` call instead of a generation — see
+§13.7.
 
 ### 6.3 Circuit breaker
 
@@ -559,9 +581,11 @@ operator step per tenant.
 
 ### 9.4 What this means for `gateway/`'s "single choke point" guarantee
 
-`GatewayService.handle_request()` is still the only function capable of
-reaching a provider (ARCHITECTURE-ESSENTIALS.md "One code path to
-Ollama") — that invariant doesn't depend on who's calling it. What changed
+`GatewayService` is still the only thing capable of reaching a provider
+(ARCHITECTURE-ESSENTIALS.md "One code path to Ollama") — that invariant
+doesn't depend on who's calling it, or which of its entrypoints
+(`handle_request()`, `handle_embedding_request()`, §13.5) they call. What
+changed
 is that there is no longer a caller that gets to skip authentication:
 previously the in-process ITF/NAR pipeline authenticated as a
 code-provisioned internal tenant; now every caller, including this repo's
@@ -639,3 +663,254 @@ tenant/model pairs with no policy (§4.2).
 instrumentation (§8.2); no Kubernetes manifests (§10, Compose only); no
 admin CRUD API for tenants (config-seeded, §4.1); no streaming to callers
 in v1 (§7); no cost/billing logic despite the schema field existing (§4.2).
+
+## 13. Embedding Models
+
+Added after v1's initial design review (§12) to serve
+`BAAI/bge-large-en-v1.5` embeddings alongside chat/vision, without
+relaxing the "Ollama only" provider constraint (§1) — Ollama serves
+embedding models natively via `/api/embed`, so this fits inside the
+existing architecture rather than requiring a scope change. Contrast with
+§14 (reranking), which does not fit and was deliberately not built.
+
+### 13.1 Why a separate schema, not a `ChatCompletionRequest` variant
+
+An embedding call has no messages, no sampling parameters
+(temperature/top_p/top_k), and no `num_predict` — and its response is a
+list of vectors, not generated text. Reusing `ChatCompletionRequest` would
+mean either ignoring most of its fields or making them all optional with
+embedding-specific validation bolted on. `gateway/models/embedding.py`
+defines `EmbeddingRequest`/`EmbeddingResponse` as their own schema instead
+— same rationale as why chat and embeddings get separate `LLMProvider`/
+`EmbeddingProvider` ABCs (§13.2) rather than one interface with optional
+methods.
+
+### 13.2 `EmbeddingProvider` (`gateway/providers/base.py`)
+
+```python
+class EmbeddingProvider(ABC):
+    @abstractmethod
+    async def embed(
+        self, *, backend: ProviderBackend, request: EmbeddingRequest
+    ) -> EmbeddingProviderResult: ...
+
+    @abstractmethod
+    async def embedding_health_check(
+        self, *, backend: ProviderBackend, model: str
+    ) -> None: ...
+```
+
+`OllamaProvider` implements both `LLMProvider` and `EmbeddingProvider` on
+one class, sharing the one `aiohttp.ClientSession` — Ollama itself natively
+serves both `/api/generate` and `/api/embed`, so one adapter instance
+genuinely covers both capabilities; this is not the same thing as adding a
+second provider *type*. `embedding_health_check` is a distinct method name
+from `LLMProvider.health_check` (not an overload) specifically because one
+class implements both ABCs — the health poller needs to call the right one
+per model (§13.7).
+
+`EmbeddingProviderResult` (dataclass, `gateway/providers/base.py`) mirrors
+`ProviderResult` minus the chat-only fields:
+
+```python
+@dataclass
+class EmbeddingProviderResult:
+    embeddings: list[list[float]]
+    prompt_tokens: int
+    latency_ms: int
+    served_model: str   # same "what actually answered" convention as
+                         # ProviderResult.served_model / ChatCompletionResponse.model
+```
+
+### 13.3 Routing (`gateway/admin/routing.yaml`, `gateway/routing/registry.py`)
+
+`routing.yaml` gets a second top-level section, `embedding_models:`, same
+shape as `models:` (backend/priority/`model_name` entries) but resolved
+and filtered independently:
+
+```yaml
+embedding_models:
+  "qllama/bge-large-en-v1.5:latest":
+    - backend: ollama-primary
+      priority: 0
+```
+
+Kept as a parallel section rather than a per-entry "kind" flag under
+`models:` because a logical model is either a chat model or an embedding
+model, never both — two parallel sections are simpler than a discriminated
+union, and leave the existing `models:` schema (and its tests) untouched.
+`BackendRegistry` exposes this as `embedding_backends_by_model` /
+`get_embedding_backends(model)`, mirroring `backends_by_model` /
+`get_backends(model)` — same circuit-breaker filtering, same
+`AllProvidersUnavailable` behavior, just a different map.
+
+`qllama/bge-large-en-v1.5:latest` is the actual Ollama library tag that
+resolves BAAI/bge-large-en-v1.5 (a community-contributed tag — there is no
+official `bge-large-en-v1.5` tag). This exact string is what tenants pass
+as `model` in `POST /v1/embeddings`, and what `RateLimitPolicy`/
+`BudgetPolicy` must key on (policy lookup is exact string match). Only
+`ollama-primary` is configured today — no failover chain for this model
+yet; add priority-1+ entries the same way §6.1's chat chain does if one is
+needed.
+
+### 13.4 Request/response schema (`gateway/models/embedding.py`)
+
+```python
+class EmbeddingRequest(BaseModel):
+    model: str
+    input: str | list[str]
+    metadata: dict[str, str] = {}
+    # .inputs: list[str] — always-a-list view, since Ollama's /api/embed
+    # and the rest of the pipeline only care about "one or more strings"
+
+class EmbeddingUsage(BaseModel):
+    prompt_tokens: int = 0
+    # no completion_tokens — there's no generation step for an embedding call
+
+class EmbeddingResponse(BaseModel):
+    id: UUID
+    model: str            # actual model that produced `embeddings` — same
+                           # "served, not requested" convention as
+                           # ChatCompletionResponse.model (§6.5)
+    backend_used: str
+    embeddings: list[list[float]]
+    usage: EmbeddingUsage
+    latency_ms: int
+```
+
+### 13.5 Pipeline: shared with chat via `GatewayService._dispatch()`
+
+`GatewayService.handle_request()` (chat) and `handle_embedding_request()`
+(embeddings) are both thin wrappers over a private `_dispatch()` method
+that holds the request-shape-agnostic spine of §3's lifecycle: rate limit
+→ budget reserve → routed failover loop → reconcile/release on
+success/failure → Prometheus metrics → async `UsageRecord` write. Each
+caller supplies `_dispatch()` with (a) which backend list to route against
+(`registry.get_backends` vs. `get_embedding_backends`), (b) how to call the
+provider for one backend attempt, and (c) how to read `(prompt_tokens,
+completion_tokens)` off that attempt's result — everything else, including
+every hard invariant (default deny, fail-closed rate limiting, no
+200-with-error-body, no retry after partial output, budget release on
+failure), is identical code, not identical-by-convention. A third
+capability (e.g. reranking, §14, if ever built) would add a
+`handle_rerank_request()` the same way, not a parallel pipeline
+implementation.
+
+### 13.6 Budget accounting for embeddings
+
+Chat requests size their pre-dispatch reservation from `num_predict` (a
+real configured cap). Embeddings have no equivalent field — nothing bounds
+"how many tokens will this embedding call cost" ahead of time the way
+`num_predict` bounds generation. `gateway/core/service.py::
+_estimate_embedding_tokens()` reserves `max(1, total_input_chars // 4)` — a
+standard rough English-text heuristic — which `_dispatch()` immediately
+reconciles down (or up) to Ollama's real `prompt_eval_count` once the
+response comes back, the same reserve-then-reconcile pattern §4.4/§3 step 6
+uses for chat. Exactness of the initial estimate doesn't matter for the
+same reason it doesn't matter there: reconciliation corrects it before the
+next request in the same period is evaluated. `completion_tokens` is
+always `0` for an embedding call — there's no generation step to produce
+any.
+
+### 13.7 Health checks
+
+`gateway/routing/health.py`'s `HealthPoller` polls two independent maps —
+`backends_by_model` (chat) and `embedding_backends_by_model` (embeddings)
+— dispatching to `LLMProvider.health_check()` for the former and
+`EmbeddingProvider.embedding_health_check()` for the latter. Both do the
+same thing conceptually (§6.2's rule: a real, cheap inference call, never a
+liveness ping) — the embedding version sends a one-word `embed()` call
+instead of a `num_predict=1` generation.
+
+### 13.8 API
+
+`POST /v1/embeddings` — `Authorization: Bearer <api_key>` required, same
+dependency (`authenticated_tenant`) as every other route; auth,
+rate-limiting, and budget enforcement are identical to
+`/v1/chat/completions`, just running against whatever `RateLimitPolicy`/
+`BudgetPolicy` exists for the requested embedding model (default deny
+applies the same way — an unentitled tenant/model pair gets `403`
+regardless of which capability it's for).
+
+## 14. Reranker Model (`BAAI/bge-reranker-v2-m3`) — Evaluated, Not Built
+
+Recorded here so this doesn't get re-derived (or silently built without a
+scope decision) next time it comes up. **Nothing in this section is
+implemented** — no `RerankProvider`, no `/v1/rerank`, no routing.yaml
+entry.
+
+### 14.1 Why it doesn't fit the current architecture
+
+`bge-reranker-v2-m3` is a **cross-encoder** (sequence-classification
+model): input is a `(query, document)` pair, output is a single relevance
+logit for that pair — it is neither an embedding model (no independent
+per-text vector to compute) nor a causal LM (no free-form generation).
+Ollama's API surface has `/api/generate` and `/api/embed` and nothing else
+— there is no `/api/rerank` and no supported way to load a
+classification-head model through Ollama's model pipeline. Unlike the
+embedding model (§13), **this is a hard technical wall, not a
+configuration gap**: there is no `model_name`/tag that makes this work
+through `OllamaProvider`. Serving it requires a genuinely different,
+non-Ollama backend, which directly collides with the v1 scope cut in §1/
+PRD §10(c) ("Cloud/non-Ollama providers" — ARCHITECTURE-ESSENTIALS.md
+"Explicitly out of scope for v1"). Building this is a scope decision for a
+human to make, not an engineering judgment call — see CLAUDE.md "Before
+adding a new provider type... stop and ask."
+
+### 14.2 What building it would require, if the scope decision is made
+
+- **A new `RerankProvider` ABC** (`gateway/providers/base.py`) and adapter,
+  following the same "one adapter per type" convention as `LLMProvider`/
+  `EmbeddingProvider` (§13.2) — `RerankRequest(model, query, documents,
+  top_n?)` → `RerankResponse(results=[{index, relevance_score}])`. Not
+  reusable from `ChatCompletionRequest` or `EmbeddingRequest` for the same
+  reason those two aren't reusable from each other (§13.1).
+- **A dedicated inference server**, since Ollama can't host it. Evaluated
+  options:
+  - **HF Text-Embeddings-Inference (TEI)** — first-class `/rerank`
+    endpoint, documents support for the BGE-reranker family directly.
+    Rust-based, CPU or GPU.
+  - **Infinity** (`michaelfeil/infinity`) — lighter-weight than TEI,
+    explicit BGE-reranker support, simple REST API.
+  - **vLLM** (score/rerank task) — capable but GPU-oriented and heavier
+    than a ~568M-param reranker needs, unless vLLM is already running for
+    something else in this deployment.
+  - **Custom FastAPI + sentence-transformers `CrossEncoder` sidecar** —
+    smallest dependency footprint, full control, but no batching/
+    quantization/perf work for free from a maintained server.
+  - **Recommendation if greenlit**: Infinity or TEI, single backend (no
+    failover chain, matching §13.3's embedding-model setup), containerized
+    as a new `docker-compose.yml` service (CLAUDE.md's Docker rule still
+    applies: verify under `docker compose up`, don't assume the compose
+    edit is correct).
+- **Budget/rate-limit accounting doesn't map cleanly.** `BudgetPolicy`
+  (§4.2) is token- and request-shaped; most rerank servers don't return a
+  token count comparable to Ollama's `prompt_eval_count`, and the
+  meaningful "cost" of a rerank call is closer to "N documents scored."
+  Two options, in order of preference:
+  1. Key budget on `max_requests` only, report `prompt_tokens=0` — zero
+     schema changes, works with the existing `BudgetPolicy`/`UsageRecord`
+     models, just doesn't distinguish a 5-document rerank from a
+     500-document one.
+  2. Add a documents-scored counter as a new `BudgetPolicy`/`UsageRecord`
+     field — real data-model scope creep, only worth it if per-document
+     cost control is an actual requirement, not a hypothetical one.
+- **Health checks, circuit breaker, and `GatewayService._dispatch()`
+  generalize with no further changes** — this is the same mechanical
+  extension as §13.7/§13.5 (a `rerank_health_check`, a third backends map,
+  a `handle_rerank_request()` wrapper over `_dispatch()`). Naming this so
+  it's clear these parts are *not* a blocker, unlike the two bullets above.
+- **Response contract choice**: there's a de facto shape from Cohere's
+  rerank API and TEI's own `/rerank` (`{query, texts}` → `[{index,
+  score}]`, sorted by relevance) worth mirroring for compatibility with
+  anything downstream that already expects that convention — same
+  reasoning as why `ChatCompletionRequest` mirrors OpenAI's chat schema
+  (§4.5).
+
+### 14.3 Status
+
+Deferred at the requester's explicit decision (not a technical blocker on
+the embedding work in §13). Revisit only once there's a concrete answer to
+"which non-Ollama backend, and does it run in `docker-compose.yml` or on
+its own host like the Ollama backends do" — that answer changes §14.2's
+plan from a sketch into an implementable one.

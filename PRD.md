@@ -1,9 +1,11 @@
 # PRD — Qwen LLM Gateway
 
-**Status**: Draft v3 (revised after design review, see §10; revised again
-after the ITF/NAR pipeline was extracted into a separate repo, see §2/§3)
+**Status**: Draft v4 (revised after design review, see §10; revised again
+after the ITF/NAR pipeline was extracted into a separate repo, see §2/§3;
+revised again to add embedding-model support and record the evaluated,
+deferred reranker decision, see §4.1a/§6/§8 and ARCHITECTURE.md §13/§14)
 **Owner**: Platform/Backend
-**Last updated**: 2026-09-03
+**Last updated**: 2026-09-12
 
 **v3 note**: v2 of this document assumed the ITF/NAR medical-form
 extraction pipeline (`agents/`, `clients/`, `prompts/`) would stay in this
@@ -79,8 +81,10 @@ consumer does — over HTTP, with a real API key
 specifically so that web app's existing request/response contract doesn't
 need to change; see ARCHITECTURE.md §9). There is no in-process caller and
 no internal/implicit tenant: **every** request, from any consumer,
-authenticates the same way and goes through exactly one code path —
-`GatewayService.handle_request()` — that ever talks to Ollama.
+authenticates the same way and goes through `GatewayService` — the only
+component that ever talks to Ollama, regardless of which model capability
+the request is for (chat/vision via `handle_request()`, embeddings via
+`handle_embedding_request()` — see §4.1a, ARCHITECTURE.md §13.5).
 
 ## 3. Who This Is For
 
@@ -97,6 +101,11 @@ authenticates the same way and goes through exactly one code path —
 - `POST /v1/chat/completions` — provider-agnostic chat/vision request
   (messages + optional image parts), OpenAI-shaped enough that a future
   non-Ollama provider is a drop-in.
+- `POST /v1/embeddings` — embedding request (`model`, `input`: one string
+  or a list), currently serving `BAAI/bge-large-en-v1.5`
+  (`qllama/bge-large-en-v1.5:latest` on Ollama). Same auth, rate-limiting,
+  and budget enforcement as every other route — see §4.1a and
+  ARCHITECTURE.md §13.
 - `POST /v1/generate-with-image` — preserves the existing multipart
   contract (`image` + `prompt` form fields) so current callers don't need to
   change their request shape on day one. Internally it's a thin adapter onto
@@ -111,6 +120,27 @@ authenticates the same way and goes through exactly one code path —
 - All three paths require a bearer API key, are rate-limited,
   budget-checked, and routed through the same failover logic — no
   exceptions for the legacy path.
+
+### 4.1a Embeddings
+
+- Adds a second model *capability* alongside chat/vision: embeddings
+  (`BAAI/bge-large-en-v1.5`), requested/returned via `POST /v1/embeddings`.
+  Deliberately not folded into the chat request/response schema — an
+  embedding call has no messages, no sampling parameters, and returns
+  vectors, not generated text (ARCHITECTURE.md §13.1).
+- Served through the same single Ollama-only provider constraint as chat
+  (§4.5) — Ollama natively serves embedding models via `/api/embed`, so
+  this does not require relaxing the "no non-Ollama providers in v1"
+  scope cut (§6). Contrast with reranking, which does — see §6 and
+  ARCHITECTURE.md §14.
+- Auth, rate limiting, and budgets apply identically to embedding
+  requests as to chat requests, keyed on the same tenant+model policy
+  model (§4.2-§4.4) — a tenant with no policy for the embedding model is
+  denied by default, same as any other model.
+- Budget reservation has no `num_predict`-equivalent to size itself from;
+  it uses a character-count estimate reconciled to Ollama's actual
+  reported usage after the call, same reserve-then-reconcile shape as
+  chat (§4.4, ARCHITECTURE.md §13.6).
 
 ### 4.2 AuthN
 - Bearer API key in `Authorization` header, resolved to a `Tenant`.
@@ -203,7 +233,14 @@ authenticates the same way and goes through exactly one code path —
 - Self-serve tenant/API-key management UI or CRUD API (seed via config for
   now).
 - Non-Ollama providers (cloud fallback) — interface is pluggable, no second
-  adapter is shipped (per design decision, §10c).
+  adapter is shipped (per design decision, §10c). This is also, concretely,
+  why a reranking model (`BAAI/bge-reranker-v2-m3`) is not built: it's a
+  cross-encoder with no Ollama-servable form (no `/api/rerank`, no
+  supported way to load a classification head), so serving it requires
+  exactly the kind of non-Ollama backend this bullet excludes. Evaluated in
+  detail, deliberately deferred pending an explicit scope decision — see
+  ARCHITECTURE.md §14. Embeddings (`BAAI/bge-large-en-v1.5`, §4.1a) are
+  unaffected by this cut — Ollama serves those natively.
 - Semantic response caching.
 - Streaming responses to the *caller* (the gateway still streams internally
   from Ollama, but v1's public contract returns a complete response — see
@@ -247,6 +284,13 @@ authenticates the same way and goes through exactly one code path —
 - **Multi-page/multi-image requests**: today's pipeline sends one image per
   request; the gateway's request schema supports multiple image parts per
   message for future use, but only single-image requests are tested in v1.
+- **Reranking was requested and evaluated, not just never considered.**
+  `BAAI/bge-reranker-v2-m3` doesn't fit this gateway's "Ollama only" v1
+  constraint (§6) — it's a cross-encoder with no Ollama-servable form. If
+  reranking becomes a real product need, the open question isn't "how do
+  we build it" (ARCHITECTURE.md §14.2 has a concrete plan) but "which
+  non-Ollama backend, and are we relaxing the provider-scope cut for it" —
+  a decision, not an engineering task.
 
 ## 9. Personas Explicitly Not Served (v1)
 

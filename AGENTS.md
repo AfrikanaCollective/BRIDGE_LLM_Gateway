@@ -25,11 +25,19 @@ Read, in order:
   extraction tool) calls it over HTTP with a real API key, same as any
   other tenant. See ARCHITECTURE-ESSENTIALS.md "What this repo is" for the
   one-paragraph version.
-- `gateway/core/service.py :: GatewayService.handle_request()` is the only
-  function allowed to reach a provider. Every HTTP route — including
-  `app.py`'s legacy `/generate-with-image` — calls through it, and every
-  caller authenticates with a real, seeded tenant's API key. There is no
-  bypass tenant.
+- `gateway/core/service.py :: GatewayService` is the only thing allowed to
+  reach a provider — `handle_request()` for chat/vision, or
+  `handle_embedding_request()` for embeddings, both built on a shared
+  `_dispatch()` pipeline (ARCHITECTURE.md §13.5). Every HTTP route —
+  including `app.py`'s legacy `/generate-with-image` — calls through one of
+  these, and every caller authenticates with a real, seeded tenant's API
+  key. There is no bypass tenant.
+- Two model capabilities ship today: chat/vision (`POST
+  /v1/chat/completions`) and embeddings (`POST /v1/embeddings`, currently
+  `qllama/bge-large-en-v1.5:latest`). Reranking (`BAAI/bge-reranker-v2-m3`)
+  was evaluated and deliberately not built — ARCHITECTURE.md §14 has the
+  full analysis; don't re-derive it from scratch or build it without
+  checking that section first.
 - Local dev: `pip install -r requirements.txt`, `docker compose up redis
   postgres prometheus grafana` for infra, then run the app per
   `README.md`. Full stack: `docker compose up`. Before anything can

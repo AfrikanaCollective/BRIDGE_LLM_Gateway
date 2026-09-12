@@ -29,12 +29,30 @@ compatibility endpoint kept for that app specifically; see
 ARCHITECTURE.md §9). Don't recreate `agents/`/`clients/`/`prompts/` here —
 that pipeline's home is elsewhere now.
 
+The gateway currently serves two model *capabilities* through Ollama, each
+with its own provider ABC and its own `GatewayService` entrypoint, sharing
+one pipeline underneath (ARCHITECTURE.md §13): chat/vision
+(`LLMProvider`, `POST /v1/chat/completions`) and embeddings
+(`EmbeddingProvider`, `POST /v1/embeddings`, currently
+`qllama/bge-large-en-v1.5:latest` — BAAI/bge-large-en-v1.5). A third
+capability, reranking (`BAAI/bge-reranker-v2-m3`), was evaluated and
+deliberately **not** built — see ARCHITECTURE.md §14 before attempting it;
+it doesn't fit Ollama's API at all (no rerank/cross-encoder endpoint) and
+would require a new provider type on non-Ollama infra, which is a scope
+decision, not an implementation detail.
+
 ## Hard rules (from the design review — see PRD.md §10 / ARCHITECTURE.md §12)
 
-- **Every path to Ollama goes through `GatewayService.handle_request()`**
-  (`gateway/core/service.py`). If you're adding code that opens a new
+- **Every path to Ollama goes through `GatewayService`** — `handle_request()`
+  for chat and `handle_embedding_request()` for embeddings
+  (`gateway/core/service.py`), both built on the same private `_dispatch()`
+  pipeline so the invariants below apply identically regardless of which
+  entrypoint a caller hits. If you're adding code that opens a new
   `aiohttp` session to a model backend, you're doing it wrong — route
-  through the gateway service instead.
+  through the gateway service instead. A new model *capability* (anything
+  that isn't chat-shaped or embedding-shaped — e.g. reranking, see
+  ARCHITECTURE.md §14) needs its own `handle_*_request()` entrypoint on
+  `GatewayService` calling `_dispatch()`, not a bypass.
 - **No internal/implicit tenant.** There used to be one (for the in-process
   ITF/NAR pipeline); it's gone along with that pipeline. Every caller —
   including `app.py`'s own legacy `/generate-with-image` handler —

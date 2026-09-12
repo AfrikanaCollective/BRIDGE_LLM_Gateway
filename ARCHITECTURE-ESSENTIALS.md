@@ -37,16 +37,36 @@ JSON-repair utilities that endpoint needs live in
 
 ## One code path to Ollama
 
-`GatewayService.handle_request()` (`gateway/core/service.py`) is the *only*
-function allowed to call a provider. Every route calls it —
-`/v1/chat/completions`, `/v1/generate-with-image`, and `app.py`'s legacy
-`/generate-with-image` alike, all requiring a real, seeded tenant's API
-key (there is no internal/implicit tenant — see ARCHITECTURE.md §9.4). If
-you're adding a new caller of Ollama anywhere in this repo, it goes
-through this function — never open a new `aiohttp` session to a model
-backend directly.
+`GatewayService` (`gateway/core/service.py`) is the *only* thing allowed to
+call a provider — `handle_request()` for chat/vision, `handle_embedding_
+request()` for embeddings. Every route calls one of these —
+`/v1/chat/completions`, `/v1/embeddings`, `/v1/generate-with-image`, and
+`app.py`'s legacy `/generate-with-image` alike, all requiring a real,
+seeded tenant's API key (there is no internal/implicit tenant — see
+ARCHITECTURE.md §9.4). Both entrypoints are built on a shared private
+`_dispatch()` method holding the request-shape-agnostic spine (rate limit
+→ budget reserve → routed failover → reconcile/release → usage record), so
+a new model capability gets a new `handle_*_request()` method calling
+`_dispatch()`, not a parallel reimplementation of that spine. If you're
+adding a new caller of Ollama anywhere in this repo, it goes through
+`GatewayService` — never open a new `aiohttp` session to a model backend
+directly.
+
+Two capabilities ship today: chat/vision (`LLMProvider`, `OllamaProvider`
+via `/api/generate`) and embeddings (`EmbeddingProvider`, `OllamaProvider`
+via `/api/embed`, currently `qllama/bge-large-en-v1.5:latest` —
+BAAI/bge-large-en-v1.5). See ARCHITECTURE.md §13. A reranking capability
+(`BAAI/bge-reranker-v2-m3`) was evaluated and deliberately not built — see
+"Explicitly out of scope for v1" below and ARCHITECTURE.md §14.
 
 ## Request pipeline (in order — do not reorder)
+
+Identical for chat and embedding requests — this is `GatewayService.
+_dispatch()`, shared by both `handle_request()` and
+`handle_embedding_request()` (ARCHITECTURE.md §13.5). Step 3's "worst-case
+tokens" is `num_predict` for chat, a ~4-chars-per-token estimate off the
+input text for embeddings (no completion tokens either way for
+embeddings) — everything else is identical.
 
 1. Auth: API key → Tenant (401 if invalid; no anonymous path)
 2. Rate limit: Redis token bucket, atomic Lua script (429 + Retry-After)
@@ -98,22 +118,25 @@ backend directly.
 
 ## Explicitly out of scope for v1 — don't build these unasked
 
-Cloud/non-Ollama providers · caller-facing streaming · admin CRUD API/UI for
-tenants (config-seeded instead) · Kubernetes manifests · semantic caching ·
-per-request USD billing · fine-grained RBAC within a tenant.
+Cloud/non-Ollama providers (this is why reranking — `BAAI/bge-reranker-v2-m3`
+— isn't built: it can't be served by Ollama at all and needs a non-Ollama
+backend; see ARCHITECTURE.md §14) · caller-facing streaming · admin CRUD
+API/UI for tenants (config-seeded instead) · Kubernetes manifests ·
+semantic caching · per-request USD billing · fine-grained RBAC within a
+tenant.
 
 ## Folder map
 
 ```
 gateway/
-  api/          FastAPI routers (chat completions, legacy adapter, usage, health)
-  core/         GatewayService orchestration + GatewayError types
+  api/          FastAPI routers (chat completions, embeddings, legacy adapter, usage, health)
+  core/         GatewayService orchestration (shared _dispatch() pipeline) + GatewayError types
   auth/         API key → Tenant resolution
   ratelimit/    Redis token bucket (Lua script)
   budget/       Reserve/reconcile budget tracker
-  routing/      Backend registry, circuit breaker, health poller
-  providers/    LLMProvider ABC + OllamaProvider
-  models/       Pydantic schemas (tenant, policy, usage, provider, chat)
+  routing/      Backend registry (chat + embedding model sections), circuit breaker, health poller
+  providers/    LLMProvider ABC + EmbeddingProvider ABC + OllamaProvider (implements both)
+  models/       Pydantic schemas (tenant, policy, usage, provider, chat, embedding)
   db/           SQLAlchemy session + migrations
   observability/ Prometheus metrics, OTel tracing, structured logging
   admin/        Tenant/API-key seeding from config
