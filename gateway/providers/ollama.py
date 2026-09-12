@@ -1,13 +1,21 @@
 """Ollama provider adapter.
 
-Talks to a single Ollama backend's /api/generate endpoint. Request/response
-handling here mirrors the streaming-NDJSON consumption that used to live
-directly in app.py, but: (1) errors raise typed GatewayErrors instead of
-returning 200-with-error-body, and (2) this only returns raw model output —
-it does not know about any caller's expected JSON shape (CLAUDE.md:
-gateway code stays domain-agnostic; response repair for the legacy
-endpoint lives in utils/clean_gen_response_from_image.py, applied to
-`ProviderResult.content` after the gateway returns it).
+Talks to a single Ollama backend's /api/generate (chat) and /api/embed
+(embedding) endpoints. Request/response handling here mirrors the
+streaming-NDJSON consumption that used to live directly in app.py, but:
+(1) errors raise typed GatewayErrors instead of returning
+200-with-error-body, and (2) this only returns raw model output — it does
+not know about any caller's expected JSON shape (CLAUDE.md: gateway code
+stays domain-agnostic; response repair for the legacy endpoint lives in
+utils/clean_gen_response_from_image.py, applied to `ProviderResult.content`
+after the gateway returns it).
+
+OllamaProvider implements both LLMProvider and EmbeddingProvider because
+Ollama itself natively serves both request shapes. It does NOT implement a
+reranking capability — Ollama has no cross-encoder/rerank endpoint, so
+BAAI/bge-reranker-v2-m3 (or any reranker) needs a different provider type
+serving a different backend; that's a separate, not-yet-built piece (see
+ARCHITECTURE-ESSENTIALS.md "explicitly out of scope for v1").
 """
 
 from __future__ import annotations
@@ -19,8 +27,9 @@ import aiohttp
 
 from gateway.core.exceptions import ProviderTimeout, AllProvidersUnavailable
 from gateway.models.chat import ChatCompletionRequest, ContentPart
+from gateway.models.embedding import EmbeddingRequest
 from gateway.models.provider import ProviderBackend
-from gateway.providers.base import LLMProvider, ProviderResult
+from gateway.providers.base import EmbeddingProvider, EmbeddingProviderResult, LLMProvider, ProviderResult
 
 
 def _flatten_prompt_and_images(request: ChatCompletionRequest) -> tuple[str, list[str]]:
@@ -43,7 +52,7 @@ def _flatten_prompt_and_images(request: ChatCompletionRequest) -> tuple[str, lis
     return "\n".join(text_parts), images
 
 
-class OllamaProvider(LLMProvider):
+class OllamaProvider(LLMProvider, EmbeddingProvider):
     def __init__(self, session: aiohttp.ClientSession, *, request_timeout_seconds: int):
         self._session = session
         self._timeout = aiohttp.ClientTimeout(total=request_timeout_seconds)
@@ -126,3 +135,37 @@ class OllamaProvider(LLMProvider):
             num_predict=1,
         )
         await self.generate(backend=backend, request=probe)
+
+    async def embed(
+        self, *, backend: ProviderBackend, request: EmbeddingRequest
+    ) -> EmbeddingProviderResult:
+        started = time.monotonic()
+        target_model = backend.target_model or request.model
+        payload = {"model": target_model, "input": request.inputs}
+
+        try:
+            async with self._session.post(
+                f"{backend.base_url}/api/embed", json=payload, timeout=self._timeout
+            ) as response:
+                if response.status != 200:
+                    body = await response.text()
+                    raise AllProvidersUnavailable(
+                        f"Backend {backend.id} returned {response.status}: {body[:300]}"
+                    )
+                data = await response.json()
+        except TimeoutError as exc:
+            raise ProviderTimeout(f"Backend {backend.id} timed out") from exc
+        except aiohttp.ClientError as exc:
+            raise AllProvidersUnavailable(f"Backend {backend.id} unreachable: {exc}") from exc
+
+        latency_ms = int((time.monotonic() - started) * 1000)
+        return EmbeddingProviderResult(
+            embeddings=data.get("embeddings", []),
+            prompt_tokens=data.get("prompt_eval_count", 0),
+            latency_ms=latency_ms,
+            served_model=target_model,
+        )
+
+    async def embedding_health_check(self, *, backend: ProviderBackend, model: str) -> None:
+        probe = EmbeddingRequest(model=model, input="ping")
+        await self.embed(backend=backend, request=probe)

@@ -48,3 +48,25 @@ models:
     - backend: ollama-secondary-2
       model_name: "qwen3.8:27b-q4_K_M"
       priority: 2
+
+# Same shape as `models:` above, but for embedding models — kept as a
+# separate section (not another entry under `models:`) because a logical
+# model is either a chat model or an embedding model, never both, and
+# GatewayService routes/health-checks them differently (see
+# gateway/routing/registry.py, gateway/providers/base.py EmbeddingProvider).
+#
+# Single-backend entry below because there's no known second host actually
+# serving this model yet — add priority-1+ entries the same way the chat
+# chain does above once a failover backend exists.
+#
+# "qllama/bge-large-en-v1.5:latest" is the actual tag `ollama pull` resolves
+# for BAAI/bge-large-en-v1.5 (a community-contributed tag on Ollama's
+# library, not BAAI's own — there is no official "bge-large-en-v1.5" tag).
+# This is the exact string tenants must pass as `model` in
+# POST /v1/embeddings; it's also what rate-limit/budget policies must be
+# keyed on (gateway/admin/tenants.yaml) since policy lookup is an exact
+# string match.
+embedding_models:
+  "qllama/bge-large-en-v1.5:latest":
+    - backend: ollama-primary
+      priority: 0

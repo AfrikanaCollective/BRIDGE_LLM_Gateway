@@ -116,6 +116,11 @@ async def build_gateway_service(
         cooldown_seconds=gateway_settings.circuit_breaker_cooldown_seconds,
     )
     registry = BackendRegistry.from_yaml(gateway_settings.routing_config_path, circuit_breaker)
+    # OllamaProvider implements both LLMProvider and EmbeddingProvider —
+    # Ollama natively serves both /api/generate and /api/embed, so one
+    # adapter instance (one aiohttp session) covers both capabilities. See
+    # gateway/providers/ollama.py's module docstring for why this does NOT
+    # extend to a reranker capability.
     provider = OllamaProvider(
         http_session, request_timeout_seconds=gateway_settings.provider_request_timeout_seconds
     )
@@ -126,6 +131,7 @@ async def build_gateway_service(
         registry=registry,
         circuit_breaker=circuit_breaker,
         provider=provider,
+        embedding_provider=provider,
         policy_resolver=policy_resolver,
         max_failover_attempts=gateway_settings.max_failover_attempts,
         usage_sink=_make_usage_sink(),
@@ -138,13 +144,16 @@ async def build_gateway_service(
             provider,
             circuit_breaker,
             interval_seconds=gateway_settings.health_check_interval_seconds,
+            embedding_backends_by_model=registry.embedding_backends_by_model,
+            embedding_provider=provider,
         )
         health_poller.start()
 
     logger.info(
-        "Gateway service ready (models=%s). Callers must authenticate with a "
-        "seeded tenant API key — see gateway/admin/seed.py.",
+        "Gateway service ready (chat_models=%s, embedding_models=%s). Callers must "
+        "authenticate with a seeded tenant API key — see gateway/admin/seed.py.",
         list(registry.backends_by_model.keys()),
+        list(registry.embedding_backends_by_model.keys()),
     )
 
     return GatewayRuntime(

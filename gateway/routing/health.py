@@ -16,7 +16,7 @@ import logging
 from gateway.core.exceptions import GatewayError
 from gateway.models.provider import ProviderBackend
 from gateway.observability.metrics import BACKEND_HEALTH
-from gateway.providers.base import LLMProvider
+from gateway.providers.base import EmbeddingProvider, LLMProvider
 from gateway.routing.circuit_breaker import CircuitBreaker
 
 logger = logging.getLogger(__name__)
@@ -30,11 +30,15 @@ class HealthPoller:
         circuit_breaker: CircuitBreaker,
         *,
         interval_seconds: int,
+        embedding_backends_by_model: dict[str, list[ProviderBackend]] | None = None,
+        embedding_provider: EmbeddingProvider | None = None,
     ):
         self._backends_by_model = backends_by_model
         self._provider = provider
         self._circuit_breaker = circuit_breaker
         self._interval_seconds = interval_seconds
+        self._embedding_backends_by_model = embedding_backends_by_model or {}
+        self._embedding_provider = embedding_provider
         self._task: asyncio.Task | None = None
 
     def start(self) -> None:
@@ -52,14 +56,18 @@ class HealthPoller:
     async def _poll_once(self) -> None:
         for model, backends in self._backends_by_model.items():
             for backend in backends:
-                await self._check_one(backend, model)
+                await self._check_one(backend, model, self._provider.health_check)
+        if self._embedding_provider is not None:
+            for model, backends in self._embedding_backends_by_model.items():
+                for backend in backends:
+                    await self._check_one(backend, model, self._embedding_provider.embedding_health_check)
 
-    async def _check_one(self, backend: ProviderBackend, model: str) -> None:
+    async def _check_one(self, backend: ProviderBackend, model: str, check) -> None:
         try:
-            # A cheap real generation (num_predict=1), not a liveness ping —
-            # this is what catches "model evicted from VRAM" cases that
-            # `/api/tags` alone would miss.
-            await self._provider.health_check(backend=backend, model=model)
+            # A cheap real generation/embed call (e.g. num_predict=1), not a
+            # liveness ping — this is what catches "model evicted from VRAM"
+            # cases that `/api/tags` alone would miss.
+            await check(backend=backend, model=model)
         except GatewayError as exc:
             logger.warning("Health check failed for backend=%s model=%s: %s", backend.id, model, exc)
             await self._circuit_breaker.record_failure(backend.id, model)

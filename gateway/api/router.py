@@ -4,6 +4,8 @@ See ARCHITECTURE.md §4.5/§9. /v1/chat/completions is the provider-agnostic
 entrypoint; /v1/generate-with-image preserves the pre-gateway multipart
 contract as a thin adapter onto the same GatewayService.handle_request()
 call — there is exactly one function underneath both routes.
+/v1/embeddings is the equivalent entrypoint for embedding models, backed by
+GatewayService.handle_embedding_request().
 """
 
 from __future__ import annotations
@@ -17,6 +19,7 @@ from gateway.config import settings
 from gateway.core.exceptions import PayloadTooLarge
 from gateway.core.service import GatewayService
 from gateway.models.chat import ChatCompletionRequest, ChatCompletionResponse, ContentPart, Message
+from gateway.models.embedding import EmbeddingRequest, EmbeddingResponse
 from gateway.models.tenant import ApiKey, Tenant
 
 router = APIRouter(prefix="/v1", tags=["gateway"])
@@ -30,6 +33,16 @@ async def chat_completions(
 ) -> ChatCompletionResponse:
     tenant, api_key = tenant_and_key
     return await service.handle_request(tenant=tenant, api_key=api_key, request=request)
+
+
+@router.post("/embeddings", response_model=EmbeddingResponse)
+async def embeddings(
+    request: EmbeddingRequest,
+    tenant_and_key: tuple[Tenant, ApiKey] = Depends(authenticated_tenant),
+    service: GatewayService = Depends(get_gateway_service),
+) -> EmbeddingResponse:
+    tenant, api_key = tenant_and_key
+    return await service.handle_embedding_request(tenant=tenant, api_key=api_key, request=request)
 
 
 @router.post("/generate-with-image", response_model=ChatCompletionResponse)
