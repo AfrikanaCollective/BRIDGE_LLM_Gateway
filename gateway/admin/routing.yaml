@@ -38,6 +38,9 @@ backends:
     keep_alive: 5m
 
 models:
+  # Config A: qwen3.5:9b (9B) as primary, failing over to the two larger
+  # models. This is the default profile for callers with modest latency
+  # needs that want the fastest model first.
   "qwen3.5:9b":
     - backend: ollama-primary
       priority: 0
@@ -48,6 +51,26 @@ models:
     - backend: ollama-secondary-2
       model_name: "qwen3.8:27b-q4_K_M"
       priority: 2
+
+  # Config B: qwen3.6:35b (35B) as primary, failing over to qwen3.5:9b.
+  # Same physical backends as config A above, reused under a second
+  # top-level model key — the circuit breaker is keyed per
+  # (backend_id, model), so ollama-primary/ollama-secondary-1's health
+  # state here is tracked independently of their entries under
+  # "qwen3.5:9b" and doesn't collide with them.
+  #
+  # A caller opts into this profile by requesting model="qwen3.6:35b"
+  # instead of "qwen3.5:9b" in POST /v1/chat/completions — no separate
+  # endpoint or config parameter. Requesting tenants need a rate_limit/
+  # budget policy that covers "qwen3.6:35b" (see gateway/admin/tenants.yaml);
+  # default-deny applies the same as any other model.
+  "qwen3.6:35b":
+    - backend: ollama-secondary-1
+      priority: 0
+      # no model_name override — this backend mirrors the requested model
+    - backend: ollama-primary
+      model_name: "qwen3.5:9b"
+      priority: 1
 
 # Same shape as `models:` above, but for embedding models — kept as a
 # separate section (not another entry under `models:`) because a logical

@@ -30,6 +30,17 @@ from gateway.db.orm import ApiKeyORM, BudgetPolicyORM, RateLimitPolicyORM, Tenan
 from gateway.db.session import async_session_factory, create_all_for_tests
 
 
+def _as_list(value: dict | list | None) -> list[dict]:
+    """`rate_limit`/`budget` may be a single mapping (one policy) or a list
+    of mappings (one policy per model this tenant is entitled to) — a
+    tenant needing per-model policies on multiple specific models sets a
+    list; the common single-policy/wildcard case keeps the plain mapping
+    shape unchanged."""
+    if value is None:
+        return []
+    return value if isinstance(value, list) else [value]
+
+
 async def _seed_tenant_entry(session: AsyncSession, entry: dict) -> TenantORM:
     """Insert a tenant + api key + policies from one `tenants.yaml` entry.
     Not idempotent — running this twice for the same entry creates a
@@ -48,8 +59,7 @@ async def _seed_tenant_entry(session: AsyncSession, entry: dict) -> TenantORM:
         )
     )
 
-    rl = entry.get("rate_limit")
-    if rl:
+    for rl in _as_list(entry.get("rate_limit")):
         session.add(
             RateLimitPolicyORM(
                 tenant_id=tenant.id,
@@ -59,8 +69,7 @@ async def _seed_tenant_entry(session: AsyncSession, entry: dict) -> TenantORM:
             )
         )
 
-    budget = entry.get("budget")
-    if budget:
+    for budget in _as_list(entry.get("budget")):
         session.add(
             BudgetPolicyORM(
                 tenant_id=tenant.id,

@@ -43,22 +43,30 @@ tenants:
       on_exceed: warn
     # The "*" wildcard above already covers "qllama/bge-large-en-v1.5:latest"
     # (or any other model added to routing.yaml) — no separate entry needed
-    # for this tenant. A tenant scoped to specific models instead (like
-    # example-external-tenant below) needs its own rate_limit/budget block
-    # per model it should be entitled to; this seed format only supports
-    # one rate_limit + one budget block per tenant entry today, so a tenant
-    # needing per-model policies on MULTIPLE specific models would need
-    # gateway/admin/seed.py extended to accept a list — not done here,
-    # flagging rather than building it speculatively.
+    # for this tenant.
 
   - name: example-external-tenant
+    # Scoped to specific models rather than "*", so rate_limit/budget are
+    # lists here (one entry per model this tenant is entitled to) — see
+    # gateway/admin/seed.py's _as_list(). A tenant with only one policy can
+    # still use the plain-mapping shape (see web-app above); this tenant
+    # needs two because it's entitled to both routing.yaml chat configs —
+    # config A ("qwen3.5:9b") and config B ("qwen3.6:35b", see
+    # routing.yaml) — with different limits per model.
     plaintext_key: gw_dev_replace_me_external
     rate_limit:
-      model: "qwen3.5:9b"
-      requests_per_minute: 30
-      burst: 5
+      - model: "qwen3.5:9b"
+        requests_per_minute: 30
+        burst: 5
+      - model: "qwen3.6:35b"
+        requests_per_minute: 15
+        burst: 3
     budget:
-      model: "qwen3.5:9b"
-      period: daily
-      max_requests: 10000
-      on_exceed: block
+      - model: "qwen3.5:9b"
+        period: daily
+        max_requests: 10000
+        on_exceed: block
+      - model: "qwen3.6:35b"
+        period: daily
+        max_requests: 5000
+        on_exceed: block
