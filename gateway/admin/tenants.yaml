@@ -50,14 +50,18 @@ tenants:
     # lists here (one entry per model this tenant is entitled to) — see
     # gateway/admin/seed.py's _as_list(). A tenant with only one policy can
     # still use the plain-mapping shape (see web-app above); this tenant
-    # needs two because it's entitled to both routing.yaml chat configs —
-    # config A ("qwen3.5:9b") and config B ("qwen3.6:35b", see
-    # routing.yaml) — with different limits per model.
+    # needs three because it's entitled to all three routing.yaml chat
+    # configs — config A ("qwen3.5:9b"), config B ("qwen3.8:27b-q4_K_M"),
+    # and config C ("qwen3.6:35b", see routing.yaml) — with different
+    # limits per model.
     plaintext_key: gw_dev_replace_me_external
     rate_limit:
       - model: "qwen3.5:9b"
         requests_per_minute: 30
         burst: 5
+      - model: "qwen3.8:27b-q4_K_M"
+        requests_per_minute: 20
+        burst: 4
       - model: "qwen3.6:35b"
         requests_per_minute: 15
         burst: 3
@@ -65,6 +69,10 @@ tenants:
       - model: "qwen3.5:9b"
         period: daily
         max_requests: 10000
+        on_exceed: block
+      - model: "qwen3.8:27b-q4_K_M"
+        period: daily
+        max_requests: 7000
         on_exceed: block
       - model: "qwen3.6:35b"
         period: daily

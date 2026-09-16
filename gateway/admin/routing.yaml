@@ -52,12 +52,32 @@ models:
       model_name: "qwen3.8:27b-q4_K_M"
       priority: 2
 
-  # Config B: qwen3.6:35b (35B) as primary, failing over to qwen3.5:9b.
-  # Same physical backends as config A above, reused under a second
-  # top-level model key — the circuit breaker is keyed per
-  # (backend_id, model), so ollama-primary/ollama-secondary-1's health
-  # state here is tracked independently of their entries under
-  # "qwen3.5:9b" and doesn't collide with them.
+  # Config B: qwen3.8:27b-q4_K_M as primary, failing over to qwen3.6:35b.
+  # Same physical backends as configs A/C, reused under a third top-level
+  # model key — the circuit breaker is keyed per (backend_id, model), so
+  # ollama-secondary-2/ollama-secondary-1's health state here is tracked
+  # independently of their entries under "qwen3.5:9b" (config A) and
+  # "qwen3.6:35b" (config C) and doesn't collide with them.
+  #
+  # A caller opts into this profile by requesting model="qwen3.8:27b-q4_K_M"
+  # in POST /v1/chat/completions — no separate endpoint or config
+  # parameter. Requesting tenants need a rate_limit/budget policy that
+  # covers "qwen3.8:27b-q4_K_M" (see gateway/admin/tenants.yaml);
+  # default-deny applies the same as any other model.
+  "qwen3.8:27b-q4_K_M":
+    - backend: ollama-secondary-2
+      priority: 0
+      # no model_name override — this backend mirrors the requested model
+    - backend: ollama-secondary-1
+      model_name: "qwen3.6:35b"
+      priority: 1
+
+  # Config C: qwen3.6:35b as primary, failing over to qwen3.5:9b. Same
+  # physical backends as configs A/B, reused under a third top-level
+  # model key — the circuit breaker is keyed per (backend_id, model), so
+  # ollama-secondary-1/ollama-primary's health state here is tracked
+  # independently of their entries under "qwen3.5:9b" (config A) and
+  # "qwen3.8:27b-q4_K_M" (config B) and doesn't collide with t  hem.
   #
   # A caller opts into this profile by requesting model="qwen3.6:35b"
   # instead of "qwen3.5:9b" in POST /v1/chat/completions — no separate

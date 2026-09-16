@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 
-from fastapi import Depends, Header, Request
+from fastapi import Header, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.auth.api_keys import resolve_tenant
@@ -24,9 +24,18 @@ async def db_session() -> AsyncIterator[AsyncSession]:
 
 async def authenticated_tenant(
     authorization: str | None = Header(default=None),
-    session: AsyncSession = Depends(db_session),
 ) -> tuple[Tenant, ApiKey]:
-    return await resolve_tenant(session, authorization)
+    """Resolves the caller's tenant with its own short-lived session,
+    scoped to just this lookup — deliberately NOT `Depends(db_session)`.
+    A `yield`-based FastAPI dependency stays checked out from the pool for
+    the entire request, and callers of this dependency (chat/embeddings)
+    can run for a long time on the provider round-trip plus failover
+    attempts; holding a pooled DB connection for all of that starves the
+    pool under backend slowness (this is the auth path CLAUDE.md calls
+    load-bearing — a pool exhaustion here degrades every tenant, not just
+    the one hitting a slow backend)."""
+    async with get_session() as session:
+        return await resolve_tenant(session, authorization)
 
 
 def get_gateway_service(request: Request) -> GatewayService:
