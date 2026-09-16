@@ -44,15 +44,17 @@ def test_embedding_request_input_normalizes_to_a_list():
 
 def test_real_routing_yaml_keeps_embedding_models_separate_from_chat_models():
     """gateway/admin/routing.yaml's embedding_models: section must resolve
-    independently of models: — an embedding model must not show up as a
-    routable chat model and vice versa."""
+    independently of models: — no model may appear in both. Asserted
+    generically (not against a hardcoded model name) because
+    embedding_models is currently EMPTY as an incident mitigation (see the
+    comment in routing.yaml, 2026-09-16) — the separation invariant still
+    holds and should keep holding once an embedding model is added back."""
     breaker = CircuitBreaker(FakeRedis(), failure_threshold=3, cooldown_seconds=30)
     registry = BackendRegistry.from_yaml(settings.routing_config_path, breaker)
 
-    assert MODEL in registry.embedding_backends_by_model
-    assert MODEL not in registry.backends_by_model
     assert "qwen3.5:9b" in registry.backends_by_model
     assert "qwen3.5:9b" not in registry.embedding_backends_by_model
+    assert not (set(registry.backends_by_model) & set(registry.embedding_backends_by_model))
 
 
 class _FakeEmbeddingProvider:
