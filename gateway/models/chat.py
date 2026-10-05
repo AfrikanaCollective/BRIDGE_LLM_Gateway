@@ -54,7 +54,12 @@ class ChatCompletionRequest(BaseModel):
         default=1.0, description="1.0 = no repeat penalty; matches the tuned deterministic defaults."
     )
     repeat_last_n: int = 256
-    num_ctx: int = 8192
+    num_ctx: int = Field(
+        default=32768,
+        gt=0,
+        le=32768,
+        description="Context window passed to Ollama; capped to what the backends' VRAM can hold.",
+    )
     stream: bool = Field(
         default=False,
         description="Caller-facing streaming is not supported in v1 — see ARCHITECTURE.md §7.",
