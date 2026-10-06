@@ -467,11 +467,11 @@ class DockerCLI:
         print(Colors.info(f"Using .env file: {self.env_config.env_file}"))
 
         # Stop existing
-        self.run_command(["docker-compose", "-f", str(compose_file), "down"], capture=True)
+        self.run_command(["docker", "compose", "-f", str(compose_file), "down"], capture=True)
 
         # Start with compose
         returncode, stdout, stderr = self.run_command(
-            ["docker-compose", "-f", str(compose_file), "up", "-d", "--build"],
+            ["docker", "compose", "-f", str(compose_file), "up", "-d", "--build"],
             capture=False
         )
 
@@ -479,7 +479,8 @@ class DockerCLI:
             print(Colors.success("✓ Service started with docker-compose\n"))
             return True
         else:
-            print(Colors.error(f"docker-compose failed: {stderr}\n"))
+            # Output was streamed live (capture=False), so stderr is None here.
+            print(Colors.error(f"docker compose failed (exit code {returncode}); see output above\n"))
             return False
 
 
