@@ -6,22 +6,21 @@
 # for a model (up to GATEWAY_MAX_FAILOVER_ATTEMPTS) if a backend is
 # unhealthy, circuit-open, or errors before returning any output.
 #
-# This chain is heterogeneous by necessity, not by design choice: the three
-# boxes below don't run the same model. A request for "qwen3.5:9b" that
-# fails over past the primary is served by qwen3.6:35b or qwen3.8:27b-q4_K_M
-# instead — a different model, on different hardware. `model_name` on a
-# routing entry is what makes that possible: it's the model actually
+# These chains are heterogeneous: once a request exhausts the backends
+# serving the requested model, it fails over to a DIFFERENT model (e.g.
+# "qwen3.5:9b" falls over to qwen3.8:27b, then qwen3.6:35b). `model_name`
+# on a routing entry is what makes that possible: it's the model actually
 # requested from THAT backend, overriding the top-level "qwen3.5:9b" key
 # (which is what tenants request and are rate-limited/budgeted against —
 # see gateway/models/provider.py's target_model and
 # ChatCompletionResponse.model in gateway/models/chat.py for how callers
 # find out which model actually answered).
 #
-# Operational note: qwen3.6:35b and qwen3.8:27b-q4_K_M are larger/different
-# models than the primary — expect different latency and output
-# characteristics on failover, not just "the same thing on a backup box."
-# Keep `keep_alive` high on all three; a cold secondary adds full model-load
-# latency on top of being a different model (ARCHITECTURE.md §6.4).
+# Operational note: qwen3.5:9b, qwen3.8:27b and qwen3.6:35b differ in size
+# — expect different latency and output characteristics on failover, not
+# just "the same thing on a backup box." Keep `keep_alive` high on every
+# backend; a cold secondary adds full model-load latency on top of being a
+# different model (ARCHITECTURE.md §6.4).
 
 backends:
   ollama-primary:
@@ -33,64 +32,65 @@ backends:
     enabled: true
     keep_alive: 5m
   ollama-secondary-2:
-    base_url: http://172.18.0.1:11434
+    base_url: http://172.16.13.68:11434
     enabled: true
     keep_alive: 5m
 
 models:
-  # Config A: qwen3.5:9b (9B) as primary, failing over to the two larger
-  # models. This is the default profile for callers with modest latency
-  # needs that want the fastest model first.
+  # Each model lives on exactly one backend:
+  #   qwen3.5:9b  -> ollama-primary     (172.17.0.1)
+  #   qwen3.8:27b -> ollama-secondary-1 (172.16.13.67)
+  #   qwen3.6:35b -> ollama-secondary-2 (172.16.13.68)
+  # Every chain tries the requested model first, then fails over to the
+  # other two models on their own backends (via model_name).
+
+  # Config A: qwen3.5:9b, failing over to qwen3.8:27b, then qwen3.6:35b.
   "qwen3.5:9b":
     - backend: ollama-primary
       priority: 0
       # no model_name override — this backend mirrors the requested model
     - backend: ollama-secondary-1
-      model_name: "qwen3.6:35b"
+      model_name: "qwen3.8:27b"
       priority: 1
     - backend: ollama-secondary-2
-      model_name: "qwen3.8:27b-q4_K_M"
+      model_name: "qwen3.6:35b"
       priority: 2
 
-  # Config B: qwen3.8:27b-q4_K_M as primary, failing over to qwen3.6:35b.
-  # Same physical backends as configs A/C, reused under a third top-level
-  # model key — the circuit breaker is keyed per (backend_id, model), so
-  # ollama-secondary-2/ollama-secondary-1's health state here is tracked
-  # independently of their entries under "qwen3.5:9b" (config A) and
-  # "qwen3.6:35b" (config C) and doesn't collide with them.
+  # Config B: qwen3.8:27b, failing over to qwen3.6:35b, then qwen3.5:9b.
+  # The circuit breaker is keyed per (backend_id, model), so these
+  # entries' health state is tracked independently of the same backends'
+  # entries under configs A/C.
   #
-  # A caller opts into this profile by requesting model="qwen3.8:27b-q4_K_M"
-  # in POST /v1/chat/completions — no separate endpoint or config
-  # parameter. Requesting tenants need a rate_limit/budget policy that
-  # covers "qwen3.8:27b-q4_K_M" (see gateway/admin/tenants.yaml);
-  # default-deny applies the same as any other model.
-  "qwen3.8:27b-q4_K_M":
+  # A caller opts into this profile by requesting model="qwen3.8:27b"
+  # in POST /v1/chat/completions. Requesting tenants need a rate_limit/
+  # budget policy that covers "qwen3.8:27b" (see
+  # gateway/admin/tenants.yaml); default-deny applies as for any model.
+  "qwen3.8:27b":
+    - backend: ollama-secondary-1
+      priority: 0
+      # no model_name override — this backend mirrors the requested model
+    - backend: ollama-secondary-2
+      model_name: "qwen3.6:35b"
+      priority: 1
+    - backend: ollama-primary
+      model_name: "qwen3.5:9b"
+      priority: 2
+
+  # Config C: qwen3.6:35b, failing over to qwen3.8:27b, then qwen3.5:9b.
+  #
+  # A caller opts into this profile by requesting model="qwen3.6:35b".
+  # Requesting tenants need a rate_limit/budget policy that covers
+  # "qwen3.6:35b" (see gateway/admin/tenants.yaml).
+  "qwen3.6:35b":
     - backend: ollama-secondary-2
       priority: 0
       # no model_name override — this backend mirrors the requested model
     - backend: ollama-secondary-1
-      model_name: "qwen3.6:35b"
+      model_name: "qwen3.8:27b"
       priority: 1
-
-  # Config C: qwen3.6:35b as primary, failing over to qwen3.5:9b. Same
-  # physical backends as configs A/B, reused under a third top-level
-  # model key — the circuit breaker is keyed per (backend_id, model), so
-  # ollama-secondary-1/ollama-primary's health state here is tracked
-  # independently of their entries under "qwen3.5:9b" (config A) and
-  # "qwen3.8:27b-q4_K_M" (config B) and doesn't collide with t  hem.
-  #
-  # A caller opts into this profile by requesting model="qwen3.6:35b"
-  # instead of "qwen3.5:9b" in POST /v1/chat/completions — no separate
-  # endpoint or config parameter. Requesting tenants need a rate_limit/
-  # budget policy that covers "qwen3.6:35b" (see gateway/admin/tenants.yaml);
-  # default-deny applies the same as any other model.
-  "qwen3.6:35b":
-    - backend: ollama-secondary-1
-      priority: 0
-      # no model_name override — this backend mirrors the requested model
     - backend: ollama-primary
       model_name: "qwen3.5:9b"
-      priority: 1
+      priority: 2
 
 # Same shape as `models:` above, but for embedding models — kept as a
 # separate section (not another entry under `models:`) because a logical

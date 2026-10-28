@@ -69,7 +69,7 @@ class BackendRegistry:
                             "priority": entry.get("priority", 0),
                             # "model_name" lets a failover entry run a DIFFERENT
                             # actual model than what the tenant requested (e.g.
-                            # qwen3.5:9b's chain falls over to qwen3.6:35b on a
+                            # qwen3.5:9b's chain falls over to qwen3.8:27b on a
                             # different host) — omit it when the backend mirrors
                             # the same model as the logical key.
                             "target_model": entry.get("model_name", model),

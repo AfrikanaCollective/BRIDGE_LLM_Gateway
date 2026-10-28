@@ -174,8 +174,9 @@ the request is for (chat/vision via `handle_request()`, embeddings via
 - Each model maps to an **ordered list of Ollama backends**. In this
   deployment that's 3 real hosts, and — this is a real, deliberate
   constraint, not a simplification for the docs — they run **different
-  models**: primary `qwen3.5:9b`, secondary 1 `qwen3.6:35b`, secondary 2
-  `qwen3.8:27b-q4_K_M`, on three different machines. Failover is "stay
+  models**: `qwen3.5:9b`, `qwen3.8:27b` and `qwen3.6:35b`, one per host,
+  each failing over to the other two (see `gateway/admin/routing.yaml`
+  for the exact per-host chains). Failover is "stay
   answering, on whatever's available," not "identical output from a
   backup." No cloud fallback in v1 (see §10c — scoped down from the
   original "any provider" idea).
@@ -270,10 +271,10 @@ the request is for (chat/vision via `handle_request()`, embeddings via
   `keep_alive` high on all backends and documenting this as expected
   behavior, not a bug — see ARCHITECTURE.md §6.3.
 - **Output quality/latency varies across the failover chain by design**:
-  the two secondaries run a 35B and a quantized 27B model, not copies of
-  the 9B primary. For the ITF/NAR pipeline specifically, extraction
+  every failover target is a different-size model (9B, 27B, 35B), not a
+  copy of the requested one. For the ITF/NAR pipeline specifically, extraction
   accuracy on a failover response has not been validated against the
-  35B/27B models — if a secondary serves enough traffic to matter, that
+  failover models — if a secondary serves enough traffic to matter, that
   needs a real accuracy check, not an assumption it's "close enough." The
   gateway reports which model actually answered (`ChatCompletionResponse.
   model`, `UsageRecord.served_model` — ARCHITECTURE.md §6.5) specifically

@@ -55,10 +55,11 @@ reference — start here if you're implementing) ·
 - **Provider failover.** Each model maps to an ordered list of Ollama
   backends; a background health check (real generation, not just a
   liveness ping) and circuit breaker route around a down/degraded backend.
-  This deployment's chain is 3 hosts running 3 *different* models
-  (`qwen3.5:9b` → `qwen3.6:35b` → `qwen3.8:27b-q4_K_M` — see
-  `gateway/admin/routing.yaml`), not identical replicas — the response
-  always reports which model actually answered.
+  Each chain tries the requested model first, then fails over to the
+  other two *different* models (`qwen3.5:9b`, `qwen3.8:27b`,
+  `qwen3.6:35b`, one per host — see `gateway/admin/routing.yaml`), not
+  identical replicas — the response always reports which model actually
+  answered.
 - **Observability.** Prometheus metrics, OpenTelemetry tracing (2 spans per
   request: inbound + per provider attempt), Grafana dashboards provisioned
   out of the box.
@@ -145,11 +146,11 @@ external web app (see "Consumers" below and ARCHITECTURE.md §9).
   - primary — `172.17.0.1:11434` — `qwen3.5:9b` (chat) and
     `qllama/bge-large-en-v1.5:latest` (embeddings — `ollama pull
     qllama/bge-large-en-v1.5:latest`)
-  - secondary 1 — `172.16.13.67:11434` — `qwen3.6:35b`
-  - secondary 2 — `172.18.0.1:11434` — `qwen3.8:27b-q4_K_M`
+  - secondary 1 — `172.16.13.67:11434` — `qwen3.8:27b`
+  - secondary 2 — `172.16.13.68:11434` — `qwen3.6:35b`
   - The gateway degrades to reduced capacity (fewer failover hops) if a
     secondary is unreachable, not a hard failure — but for full parity
-    with the configured chain, all three should be up. The embedding
+    with the configured chains, all three should be up. The embedding
     model has no failover backend configured today (single entry on
     `ollama-primary`) — see `ARCHITECTURE.md` §13.3.
 

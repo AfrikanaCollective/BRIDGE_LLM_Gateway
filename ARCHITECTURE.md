@@ -66,14 +66,14 @@ day-to-day implementation decisions.
                             │
               ┌─────────────┼──────────────┬───────────────┬───────────────┐
               ▼             ▼              ▼               ▼               ▼
-        ┌──────────┐  ┌──────────┐  ┌────────────┐  ┌────────────┐  ┌────────────┐
+        ┌──────────┐  ┌──────────┐  ┌──────────────┐ ┌────────────┐  ┌────────────┐
         │  Redis   │  │ Postgres │  │Ollama:primary│ │Ollama:sec-1│  │Ollama:sec-2│
-        │ (buckets,│  │ (SQLite  │  │172.17.0.1    │ │172.16.13.67│  │172.18.0.1  │
-        │ budgets, │  │  in dev) │  │qwen3.5:9b    │ │qwen3.6:35b │  │qwen3.8:27b │
-        │ breaker) │  │ tenants, │  └────────────┘  └────────────┘  │-q4_K_M     │
-        │          │  │ usage    │                                  └────────────┘
-        └──────────┘  └──────────┘                    (see §6.5 — different models,
-                                                         not mirrored replicas)
+        │ (buckets,│  │ (SQLite  │  │172.17.0.1    │ │172.16.13.67│  │172.16.13.68│
+        │ budgets, │  │  in dev) │  │qwen3.5:9b    │ │qwen3.8:27b │  │qwen3.6:35b │
+        │ breaker) │  │ tenants, │  └──────────────┘ └────────────┘  └────────────┘
+        │          │  │ usage    │
+        └──────────┘  └──────────┘          (see §6.5 — different models,
+                                              not mirrored replicas)
 
         Prometheus scrapes /metrics  →  Grafana dashboards
 ```
@@ -323,7 +323,7 @@ backends:
     base_url: http://172.16.13.67:11434
     keep_alive: 5m
   ollama-secondary-2:
-    base_url: http://172.18.0.1:11434
+    base_url: http://172.16.13.68:11434
     keep_alive: 5m
 
 models:
@@ -332,11 +332,13 @@ models:
       priority: 0
       # no model_name override — mirrors the requested model
     - backend: ollama-secondary-1
-      model_name: "qwen3.6:35b"
+      model_name: "qwen3.8:27b"
       priority: 1
     - backend: ollama-secondary-2
-      model_name: "qwen3.8:27b-q4_K_M"
+      model_name: "qwen3.6:35b"
       priority: 2
+  # "qwen3.8:27b": secondary-1 -> secondary-2 (qwen3.6:35b) -> primary (qwen3.5:9b)
+  # "qwen3.6:35b": secondary-2 -> secondary-1 (qwen3.8:27b) -> primary (qwen3.5:9b)
 ```
 
 `GATEWAY_MAX_FAILOVER_ATTEMPTS` must be `>=` the longest chain here (3) or
@@ -385,15 +387,18 @@ Per `(backend_id, model)`:
 
 ### 6.5 Heterogeneous models across a failover chain
 
-The failover chain in this deployment is **not** the same model mirrored
-on backup hardware — it's three different models on three different
-hosts:
+The failover chains in this deployment are **not** the same model
+mirrored on backup hardware. Each model runs on exactly one host, so
+every failover hop lands on a different model:
 
-| Priority | Backend | Host | Model |
+| Requested | Priority 0 | Priority 1 | Priority 2 |
 |---|---|---|---|
-| 0 (primary) | `ollama-primary` | `172.17.0.1:11434` | `qwen3.5:9b` |
-| 1 | `ollama-secondary-1` | `172.16.13.67:11434` | `qwen3.6:35b` |
-| 2 | `ollama-secondary-2` | `172.18.0.1:11434` | `qwen3.8:27b-q4_K_M` |
+| `qwen3.5:9b` | `ollama-primary` `qwen3.5:9b` | `ollama-secondary-1` `qwen3.8:27b` | `ollama-secondary-2` `qwen3.6:35b` |
+| `qwen3.8:27b` | `ollama-secondary-1` `qwen3.8:27b` | `ollama-secondary-2` `qwen3.6:35b` | `ollama-primary` `qwen3.5:9b` |
+| `qwen3.6:35b` | `ollama-secondary-2` `qwen3.6:35b` | `ollama-secondary-1` `qwen3.8:27b` | `ollama-primary` `qwen3.5:9b` |
+
+Hosts: `ollama-primary` `172.17.0.1:11434`, `ollama-secondary-1`
+`172.16.13.67:11434`, `ollama-secondary-2` `172.16.13.68:11434`.
 
 This changes what "failover" means and touches several parts of the
 design that assumed (or would naturally default to) identical models
@@ -409,7 +414,7 @@ across a chain:
 - **`ChatCompletionResponse.model` reports what actually answered, not
   what was requested** — consistent with how most chat-completion APIs
   use that field. A request for `qwen3.5:9b` that fails over to
-  `ollama-secondary-1` gets `model="qwen3.6:35b"` back, so the caller
+  `ollama-secondary-1` gets `model="qwen3.8:27b"` back, so the caller
   (and `app.py`'s legacy handler, which surfaces it in the response's
   `metrics.backend_used` alongside it) can tell a fallback model answered.
 - **Rate limiting and budgeting stay keyed on the requested model**, not
@@ -421,11 +426,11 @@ across a chain:
 - **`UsageRecord` carries both**: `model` (requested, the
   rate-limit/budget key) and `served_model` (actual, nullable — set only
   on success). This is the field to query when auditing "how often did
-  tenant X actually get answered by the 35B fallback instead of the 9B
+  tenant X actually get answered by the 27B fallback instead of the 9B
   primary."
 - **Expect materially different latency and output characteristics on
-  failover** — `qwen3.6:35b` and `qwen3.8:27b-q4_K_M` are not
-  drop-in equivalents of `qwen3.5:9b` in speed or extraction behavior (the
+  failover** — `qwen3.8:27b` and `qwen3.5:9b` are not drop-in
+  equivalents of each other in speed or extraction behavior (the
   external web app's form-extraction use case cares about this, even
   though that logic no longer lives in this repo — §9). This is a
   deliberate scope note, not something to "fix" by trying to make the
@@ -613,7 +618,7 @@ the request and the usage record.
 Services: `gateway` (this app), `redis`, `postgres`, `prometheus`,
 `grafana`. Ollama itself is **not** containerized by this stack — all
 three backends in the failover chain are separate real hosts, reached
-directly over the network (`172.17.0.1`, `172.16.13.67`, `172.18.0.1`;
+directly over the network (`172.17.0.1`, `172.16.13.67`, `172.16.13.68`;
 see §6.1/§6.5), not spun up by this compose file.
 `gateway/admin/routing.yaml`, not `.env.example`, is the source of truth
 for that topology — `.env.example`'s `OLLAMA_BASE_URL`/`MODEL_NAME` only

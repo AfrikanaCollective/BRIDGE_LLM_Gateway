@@ -69,7 +69,15 @@ class HealthPoller:
             # cases that `/api/tags` alone would miss.
             await check(backend=backend, model=model)
         except GatewayError as exc:
-            logger.warning("Health check failed for backend=%s model=%s: %s", backend.id, model, exc)
+            # Log target_model too: with a model_name override, the model
+            # actually probed differs from the logical `model` key.
+            logger.warning(
+                "Health check failed for backend=%s model=%s target_model=%s: %s",
+                backend.id,
+                model,
+                backend.target_model or model,
+                exc,
+            )
             await self._circuit_breaker.record_failure(backend.id, model)
             BACKEND_HEALTH.labels(backend_id=backend.id, model=model).set(0)
         else:

@@ -87,7 +87,7 @@ class ChatCompletionResponse(BaseModel):
     model: str
     """The model that actually generated `content` — NOT necessarily the
     model the tenant requested. A request for "qwen3.5:9b" that fails over
-    to a secondary backend running "qwen3.6:35b" gets `model="qwen3.6:35b"`
+    to a secondary backend running "qwen3.8:27b" gets `model="qwen3.8:27b"`
     back, so the caller knows what really answered (this repo's failover
     chain deliberately mixes model sizes across backends — see
     ARCHITECTURE.md §6.5). Rate limiting and budgeting stay keyed on the

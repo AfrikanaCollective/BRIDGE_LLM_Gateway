@@ -100,10 +100,10 @@ async def test_registry_raises_for_unconfigured_model(redis, backends):
 @pytest.mark.asyncio
 async def test_real_routing_yaml_resolves_heterogeneous_model_chain(redis):
     """gateway/admin/routing.yaml's actual chain fails over qwen3.5:9b to
-    TWO DIFFERENT models (qwen3.6:35b, qwen3.8:27b-q4_K_M) on different
-    hosts — not just the same model mirrored on a backup box. Confirms
-    BackendRegistry.from_yaml resolves each entry's target_model correctly
-    and defaults it to the logical model name when no override is given
+    DIFFERENT models (qwen3.8:27b, then qwen3.6:35b) — not just the same
+    model mirrored on a backup box. Confirms BackendRegistry.from_yaml
+    resolves each entry's target_model correctly and defaults it to the
+    logical model name when no override is given
     (see gateway/models/provider.py's target_model, ARCHITECTURE.md §6.5).
     """
     breaker = CircuitBreaker(redis, failure_threshold=3, cooldown_seconds=30)
@@ -116,11 +116,11 @@ async def test_real_routing_yaml_resolves_heterogeneous_model_chain(redis):
     # Primary mirrors the requested model (no override in the YAML).
     assert by_id["ollama-primary"].target_model == "qwen3.5:9b"
     assert by_id["ollama-primary"].base_url == "http://172.17.0.1:11434"
-    # Secondaries run different models entirely.
-    assert by_id["ollama-secondary-1"].target_model == "qwen3.6:35b"
+    # Secondaries run a different model entirely.
+    assert by_id["ollama-secondary-1"].target_model == "qwen3.8:27b"
     assert by_id["ollama-secondary-1"].base_url == "http://172.16.13.67:11434"
-    assert by_id["ollama-secondary-2"].target_model == "qwen3.8:27b-q4_K_M"
-    assert by_id["ollama-secondary-2"].base_url == "http://172.18.0.1:11434"
+    assert by_id["ollama-secondary-2"].target_model == "qwen3.6:35b"
+    assert by_id["ollama-secondary-2"].base_url == "http://172.16.13.68:11434"
 
 
 @pytest.mark.asyncio

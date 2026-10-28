@@ -5,8 +5,8 @@ startup (no hot-reload in v1). BackendHealth is runtime state cached in
 Redis and refreshed by the background poller (gateway/routing/health.py).
 
 Failover chains are not required to run the same model on every backend —
-this deployment's actual chain fails over from qwen3.5:9b (primary) to
-qwen3.6:35b and qwen3.8:27b-q4_K_M on different hardware (see
+this deployment's chains fail over between qwen3.5:9b, qwen3.8:27b and
+qwen3.6:35b, each on different hardware (see
 gateway/admin/routing.yaml). `target_model` is what makes that possible:
 each (logical model, backend) routing entry gets its own ProviderBackend
 copy carrying the model name to actually request from *that* backend,
@@ -45,7 +45,7 @@ class ProviderBackend(BaseModel):
             "The model name to actually request from THIS backend when it's "
             "used to serve a given logical/requested model — e.g. a request "
             "for \"qwen3.5:9b\" that fails over to a secondary backend running "
-            "qwen3.6:35b instead. None means \"same name as requested\" (the "
+            "qwen3.8:27b instead. None means \"same name as requested\" (the "
             "common case: identical model mirrored across backends). Set per "
             "routing-table entry by gateway/routing/registry.py, not by hand."
         ),

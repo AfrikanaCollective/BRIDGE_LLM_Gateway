@@ -78,7 +78,7 @@ decision, not an implementation detail.
   reachable. See `gateway/routing/health.py`.
 - **Never key rate limiting or budgets on the served model.** The failover
   chain is heterogeneous — a request for `qwen3.5:9b` may be answered by
-  `qwen3.6:35b` or `qwen3.8:27b-q4_K_M` (see `gateway/admin/routing.yaml`,
+  `qwen3.8:27b` (see `gateway/admin/routing.yaml`,
   ARCHITECTURE.md §6.5). Policies stay keyed on `request.model` (what the
   tenant asked for); `served_model` (`ProviderResult`, `UsageRecord`,
   `ChatCompletionResponse.model`) is for reporting/audit only.

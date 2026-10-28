@@ -61,7 +61,7 @@ class OllamaProvider(LLMProvider, EmbeddingProvider):
         prompt, images = _flatten_prompt_and_images(request)
         # backend.target_model lets a failover backend run a different
         # actual model than the tenant requested (e.g. qwen3.5:9b's chain
-        # falling over to qwen3.6:35b) — see gateway/models/provider.py.
+        # falling over to qwen3.8:27b) — see gateway/models/provider.py.
         payload: dict = {
             "model": backend.target_model or request.model,
             "prompt": prompt,

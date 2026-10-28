@@ -26,10 +26,10 @@ JSON-repair utilities that endpoint needs live in
 - OpenTelemetry — **2 spans per request only** (inbound + per provider
   attempt), not full instrumentation
 - Providers: **Ollama only**, 3 backend instances for failover — and they
-  run **different models**, not copies of each other (primary
-  `qwen3.5:9b` @ `172.17.0.1`, then `qwen3.6:35b` @ `172.16.13.67`, then
-  `qwen3.8:27b-q4_K_M` @ `172.18.0.1`; see `gateway/admin/routing.yaml` and
-  ARCHITECTURE.md §6.5). No cloud provider in v1. `LLMProvider` ABC stays
+  fail over to **different models**, not just copies of each other
+  (`qwen3.5:9b`, `qwen3.8:27b`, `qwen3.6:35b`, one per host, each
+  failing over to the other two; see
+  `gateway/admin/routing.yaml` and ARCHITECTURE.md §6.5). No cloud provider in v1. `LLMProvider` ABC stays
   pluggable for later.
 - Deploy: Docker Compose only (gateway, redis, postgres, prometheus,
   grafana). No Kubernetes. All 3 Ollama backends run on separate real
@@ -109,7 +109,7 @@ embeddings) — everything else is identical.
 - **Rate limiting/budgets are keyed on the requested model, not whichever
   model actually answered.** The failover chain is heterogeneous (§6.5) —
   a tenant's `qwen3.5:9b` budget governs the request even when a
-  secondary running `qwen3.6:35b` served it. `ChatCompletionResponse.model`
+  secondary running `qwen3.8:27b` served it. `ChatCompletionResponse.model`
   and `UsageRecord.served_model` report the actual model; `UsageRecord.model`
   and every rate-limit/budget lookup stay on the requested one.
 - **`GATEWAY_MAX_FAILOVER_ATTEMPTS` must be `>=` the longest chain in
