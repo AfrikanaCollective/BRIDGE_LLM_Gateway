@@ -3,15 +3,214 @@
   "uid": "gateway-overview",
   "timezone": "utc",
   "schemaVersion": 39,
-  "version": 1,
+  "version": 3,
   "refresh": "15s",
-  "time": { "from": "now-1h", "to": "now" },
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
   "panels": [
+    {
+      "id": 7,
+      "title": "Requests in selected time range",
+      "description": "Request count by status over the dashboard's time range. Uses increase(), so single requests show up as whole numbers instead of a near-zero per-second rate. Note: a series' very first request (counter appearing at 1) isn't counted by increase().",
+      "type": "stat",
+      "gridPos": {
+        "h": 5,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "value_and_name",
+        "orientation": "horizontal"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "success"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "green"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "^(?!success$).*"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "red"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "expr": "sum by (status) (round(increase(gateway_requests_total[$__range])))",
+          "legendFormat": "{{status}}",
+          "instant": true
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "title": "Requests (since gateway restart)",
+      "description": "Request count by status. Raw counter totals since the gateway process last started \u2014 unlike the rate()/increase() panels, these include a series' first request, but they reset to 0 on every gateway restart.",
+      "type": "stat",
+      "gridPos": {
+        "h": 5,
+        "w": 8,
+        "x": 0,
+        "y": 5
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value_and_name",
+        "orientation": "horizontal"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "sum by (status) (gateway_requests_total)",
+          "legendFormat": "{{status}}",
+          "instant": true
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "title": "Tokens spent (since gateway restart)",
+      "description": "Prompt and completion tokens. Raw counter totals since the gateway process last started \u2014 unlike the rate()/increase() panels, these include a series' first request, but they reset to 0 on every gateway restart.",
+      "type": "stat",
+      "gridPos": {
+        "h": 5,
+        "w": 8,
+        "x": 8,
+        "y": 5
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value_and_name",
+        "orientation": "horizontal"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "sum by (kind) (gateway_tokens_total)",
+          "legendFormat": "{{kind}}",
+          "instant": true
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "title": "Avg latency (since gateway restart)",
+      "description": "Mean end-to-end latency per requested model. Raw counter totals since the gateway process last started \u2014 unlike the rate()/increase() panels, these include a series' first request, but they reset to 0 on every gateway restart.",
+      "type": "stat",
+      "gridPos": {
+        "h": 5,
+        "w": 8,
+        "x": 16,
+        "y": 5
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value_and_name",
+        "orientation": "horizontal"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "decimals": 1
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "sum by (model) (gateway_request_latency_seconds_sum) / sum by (model) (gateway_request_latency_seconds_count)",
+          "legendFormat": "{{model}}",
+          "instant": true
+        }
+      ]
+    },
     {
       "id": 1,
       "title": "Request rate by status",
       "type": "timeseries",
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 10
+      },
       "targets": [
         {
           "expr": "sum by (status) (rate(gateway_requests_total[5m]))",
@@ -23,7 +222,12 @@
       "id": 2,
       "title": "Latency p50 / p95 / p99",
       "type": "timeseries",
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 10
+      },
       "targets": [
         {
           "expr": "histogram_quantile(0.50, sum by (le) (rate(gateway_request_latency_seconds_bucket[5m])))",
@@ -43,7 +247,12 @@
       "id": 3,
       "title": "Rate limit / budget rejections",
       "type": "timeseries",
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 18
+      },
       "targets": [
         {
           "expr": "sum by (tenant) (rate(gateway_rate_limit_rejections_total[5m]))",
@@ -59,7 +268,12 @@
       "id": 4,
       "title": "Backend health",
       "type": "timeseries",
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 18
+      },
       "targets": [
         {
           "expr": "gateway_backend_health",
@@ -71,7 +285,12 @@
       "id": 5,
       "title": "Failover attempts",
       "type": "timeseries",
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 26
+      },
       "targets": [
         {
           "expr": "sum by (model, from_backend, to_backend) (rate(gateway_failover_attempts_total[5m]))",
@@ -83,7 +302,12 @@
       "id": 6,
       "title": "Token throughput",
       "type": "timeseries",
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 26
+      },
       "targets": [
         {
           "expr": "sum by (kind) (rate(gateway_tokens_total[5m]))",

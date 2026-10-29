@@ -8,6 +8,15 @@ everything below is cheap enough to be always-on.
 
 from prometheus_client import Counter, Gauge, Histogram
 
+# prometheus_client's default buckets top out at 10s, which LLM calls blow
+# past routinely — every slower request lands in +Inf and histogram_quantile
+# pins p50/p95/p99 at 10. These run up to provider_request_timeout_seconds
+# (gateway/config.py, 600 by default) so anything short of a timeout gets a
+# real bucket. Low end is kept fine-grained for embeddings.
+LATENCY_BUCKETS_SECONDS = (
+    0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 15.0, 30.0, 60.0, 120.0, 300.0, 600.0,
+)
+
 REQUESTS_TOTAL = Counter(
     "gateway_requests_total",
     "Total gateway requests",
@@ -18,6 +27,7 @@ REQUEST_LATENCY_SECONDS = Histogram(
     "gateway_request_latency_seconds",
     "End-to-end gateway request latency",
     ["tenant", "model"],
+    buckets=LATENCY_BUCKETS_SECONDS,
 )
 
 TOKENS_TOTAL = Counter(
@@ -56,4 +66,5 @@ MODEL_LOAD_SECONDS = Histogram(
     "(e.g. on failover to a cold backend) — expected, not an anomaly; see "
     "ARCHITECTURE.md §6.4.",
     ["backend_id", "model"],
+    buckets=LATENCY_BUCKETS_SECONDS,
 )

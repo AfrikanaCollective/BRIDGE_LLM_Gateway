@@ -1,4 +1,4 @@
-# Qwen LLM Gateway
+# LLM Gateway with Fallback Routing
 
 A production-oriented LLM gateway that every LLM request in this deployment
 routes through, sitting in front of one or more Ollama backends, with
