@@ -301,6 +301,14 @@ _generate_with_image_auth_dep = authenticated_tenant if GATEWAY_ROUTES_AVAILABLE
 async def generate_with_image(
         image: UploadFile = File(...),
         prompt: str = Form(...),
+        # Optional; omitted -> config.MODEL_NAME (the pre-change hardcoded
+        # behaviour, so existing callers are unaffected). Entitlement is
+        # enforced by GatewayService on request.model (default deny ->
+        # 403 ModelNotEntitled). An empty form value (model=) is treated by
+        # FastAPI as "not provided" and also gets the default; min_length=1
+        # is a guard in case that framework behaviour changes, so an empty
+        # model never reaches policy/routing as a confusing 403/503.
+        model: str = Form(default=config.MODEL_NAME, min_length=1),
         tenant_and_key: tuple = Depends(_generate_with_image_auth_dep),
 ):
     """Generate response based on image and text prompt.
@@ -337,11 +345,11 @@ async def generate_with_image(
     ext = (image.filename or "").rsplit(".", 1)[-1].lower()
     media_type = "image/jpeg" if ext in ("jpg", "jpeg") else f"image/{ext or 'png'}"
 
-    logger.info(f"Processing image: {image.filename} ({media_type})")
+    logger.info(f"Processing image: {image.filename} ({media_type}) model={model}")
     logger.info(f"Image size: {len(image_data) / (1024 * 1024):.2f} MBs")
 
     chat_request = ChatCompletionRequest(
-        model=config.MODEL_NAME,
+        model=model,
         messages=[
             Message(
                 role="user",

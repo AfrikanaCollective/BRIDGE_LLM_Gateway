@@ -64,8 +64,13 @@ def repair_trailing_bare_strings(json_text: str) -> str:
     Moved here from app.py (ARCHITECTURE.md §9) — see clean_json_string
     docstring above for why.
     """
-    # Tokenize into quoted strings and structural characters.
-    token_pattern = re.compile(r'"(?:[^"\\]|\\.)*"|[{}\[\],:]')
+    # Tokenize into quoted strings, structural characters, and bare
+    # literals (numbers, true/false/null, or any other unquoted run).
+    # Bare literals MUST be tokens: findall() silently drops anything that
+    # matches no alternative, so without the third branch every non-string
+    # scalar vanished ({"n": 5} -> {"n":}), the result failed to parse, and
+    # the legacy handler fell back to returning raw text.
+    token_pattern = re.compile(r'"(?:[^"\\]|\\.)*"|[{}\[\],:]|[^\s"{}\[\],:]+')
     tokens = token_pattern.findall(json_text)
 
     def is_str(tok: str) -> bool:
